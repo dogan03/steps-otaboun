@@ -1,0 +1,15 @@
+artifact_uri: file:///home/berat/code/steps-parser/mlruns/734895566154657145/c6755a9e101140cc8a04b2503e782253/artifacts
+end_time: 1722260266137
+entry_point_name: ''
+experiment_id: '734895566154657145'
+lifecycle_stage: active
+run_id: c6755a9e101140cc8a04b2503e782253
+run_name: bert-base-turkish-cased
+run_uuid: c6755a9e101140cc8a04b2503e782253
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1722260263577
+status: 3
+tags: []
+user_id: berat

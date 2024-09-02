@@ -1,0 +1,15 @@
+artifact_uri: file:///home/berat/code/steps-parser/mlruns/830241069120248490/cef94a20c2b84ac38921e846cea9c558/artifacts
+end_time: 1722256421112
+entry_point_name: ''
+experiment_id: '830241069120248490'
+lifecycle_stage: active
+run_id: cef94a20c2b84ac38921e846cea9c558
+run_name: fact_mbert
+run_uuid: cef94a20c2b84ac38921e846cea9c558
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1722256421093
+status: 3
+tags: []
+user_id: berat
