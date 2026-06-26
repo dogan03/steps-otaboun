@@ -16,7 +16,9 @@ Usage:
     python src/run_sweep.py run --dry-run        # print the commands without running
     python src/run_sweep.py run                  # run the whole grid
     python src/run_sweep.py run --tasks parse --models berturk --train-sets ota   # a subset
+    python src/run_sweep.py run --cv 5           # k-fold CV within the training set
     python src/run_sweep.py collect              # (re)build the summary table from existing logs
+    python src/run_sweep.py collect --cv 5       # collect CV results instead of repeats
 
 Edit the PATHS block below to match your environment (e.g. Colab paths).
 """
@@ -53,7 +55,7 @@ TEST_FILE = "data/corpora/ota_boun/ota_boun-ud-test.conllu"
 # so each task needs its own base config; everything else is overridden per run.
 TASKS = {
     "parse": {"config": "configs/ota_boun.json", "eval": "basic", "with_test": True},
-    "upos":  {"config": "configs/ota_upos.json", "eval": "basic", "with_test": False},
+    "upos":  {"config": "configs/ota_upos.json", "eval": "basic", "with_test": True},
 }
 
 REPEATS = [1, 2, 3]            # the paper reports mean +/- std over 3 runs
@@ -72,17 +74,20 @@ def out_path(task, model, train_set, repeat):
     return OUTPUT_DIR / f"output_{task}_{model}_{train_set}_{repeat}.txt"
 
 
-def build_command(task, model, train_set, repeat):
-    """Build the train.py command for one grid cell."""
+def cv_out_path(task, model, train_set, k, fold):
+    return OUTPUT_DIR / f"output_{task}_{model}_{train_set}_cv{k}_fold{fold}.txt"
+
+
+def build_command(task, model, name, train_file, dev_file):
+    """Build the train.py command for one run, given explicit train/dev files."""
     spec = TASKS[task]
-    name = f"{task}_{model}_{train_set}_{repeat}"
 
     mods = [
         f"experiment={task}",
         f"name={name}",
         f"model.args.embeddings_processor.args.model_path={MODELS[model]}",
-        f"data_loaders.paths.train={TRAIN_SETS[train_set]}",
-        f"data_loaders.paths.dev={TEST_FILE}",
+        f"data_loaders.paths.train={train_file}",
+        f"data_loaders.paths.dev={dev_file}",
         f"data_loaders.args.num_workers={NUM_WORKERS}",
     ]
     if spec["with_test"]:
@@ -94,6 +99,72 @@ def build_command(task, model, train_set, repeat):
         "-e", spec["eval"],
         "-m", *mods,
     ]
+
+
+def _run_to_log(cmd, log_file, dry_run):
+    """Run a command, streaming output to both console and log file."""
+    print(">>", " ".join(cmd))
+    print("   log ->", log_file)
+    if dry_run:
+        return
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file, "w") as f:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                cwd=REPO_ROOT, text=True, bufsize=1)
+        for line in proc.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            f.write(line)
+        proc.wait()
+
+
+# ---- k-fold cross-validation helpers -------------------------------------------------
+def _read_sentences(conllu_path):
+    """Read a CoNLL-U file into a list of sentence blocks (lists of lines incl. newline)."""
+    blocks, cur = [], []
+    with open(conllu_path) as f:
+        for line in f:
+            if line.strip() == "":
+                if cur:
+                    blocks.append(cur)
+                    cur = []
+            else:
+                cur.append(line if line.endswith("\n") else line + "\n")
+    if cur:
+        blocks.append(cur)
+    return blocks
+
+
+def _write_sentences(blocks, path):
+    with open(path, "w") as f:
+        for block in blocks:
+            f.writelines(block)
+            f.write("\n")  # blank line separates sentences
+
+
+def make_folds(train_file, k, out_dir):
+    """Split a training corpus into k round-robin folds; write train/dev file per fold.
+
+    Returns a list of (train_path, dev_path) tuples, one per fold.
+    """
+    sents = _read_sentences(train_file)
+    if len(sents) < k:
+        sys.exit(f"Cannot make {k} folds from {len(sents)} sentences in {train_file}")
+    buckets = [[] for _ in range(k)]
+    for i, s in enumerate(sents):
+        buckets[i % k].append(s)  # round-robin keeps folds balanced
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fold_files = []
+    for i in range(k):
+        dev = buckets[i]
+        train = [s for j in range(k) if j != i for s in buckets[j]]
+        tp = out_dir / f"fold{i}_train.conllu"
+        dp = out_dir / f"fold{i}_dev.conllu"
+        _write_sentences(train, tp)
+        _write_sentences(dev, dp)
+        fold_files.append((tp, dp))
+    return fold_files
 
 
 def cmd_prep(args):
@@ -117,26 +188,38 @@ def cmd_prep(args):
 
 
 def cmd_run(args):
+    if getattr(args, "cv", 0) and args.cv > 1:
+        return run_cv(args)
+
     combos = list(itertools.product(args.tasks, args.models, args.train_sets, args.repeats))
     print(f"{len(combos)} run(s) planned\n")
 
     for task, model, train_set, repeat in combos:
-        cmd = build_command(task, model, train_set, repeat)
-        log_file = out_path(task, model, train_set, repeat)
-        print(">>", " ".join(cmd))
-        print("   log ->", log_file)
-        if args.dry_run:
-            continue
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_file, "w") as f:
-            # Stream output to BOTH the console (live progress) and the log file.
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    cwd=REPO_ROOT, text=True, bufsize=1)
-            for line in proc.stdout:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-                f.write(line)
-            proc.wait()
+        name = f"{task}_{model}_{train_set}_{repeat}"
+        cmd = build_command(task, model, name, TRAIN_SETS[train_set], TEST_FILE)
+        _run_to_log(cmd, out_path(task, model, train_set, repeat), args.dry_run)
+
+    if not args.dry_run:
+        print()
+        cmd_collect(args)
+
+
+def run_cv(args):
+    """k-fold cross-validation: split each training set into k folds; for each fold,
+    train on k-1 folds, early-stop on the held-out fold, and (for parse) evaluate on
+    the OTA test set. Results are averaged over folds in collect.
+    """
+    k = args.cv
+    combos = list(itertools.product(args.tasks, args.models, args.train_sets))
+    print(f"{len(combos)} config(s) x {k} folds = {len(combos) * k} run(s)\n")
+
+    for task, model, train_set in combos:
+        fold_dir = OUTPUT_DIR / "cv_folds" / train_set / f"cv{k}"
+        folds = make_folds(TRAIN_SETS[train_set], k, fold_dir)
+        for i, (train_file, dev_file) in enumerate(folds):
+            name = f"{task}_{model}_{train_set}_cv{k}_fold{i}"
+            cmd = build_command(task, model, name, train_file, dev_file)
+            _run_to_log(cmd, cv_out_path(task, model, train_set, k, i), args.dry_run)
 
     if not args.dry_run:
         print()
@@ -146,7 +229,8 @@ def cmd_run(args):
 # Patterns for the metrics train.py prints to the log.
 RE_LAS = re.compile(r"las_final_test:\s*([\d.]+)%")
 RE_UAS = re.compile(r"uas_final_test:\s*([\d.]+)%")
-RE_UPOS = re.compile(r"upos-fscore[^:]*:\s*([\d.]+)%")
+RE_UPOS_TEST = re.compile(r"upos_final_test:\s*([\d.]+)%")
+RE_UPOS_VALID = re.compile(r"upos-fscore[^:]*:\s*([\d.]+)%")
 
 
 def parse_log(task, path):
@@ -160,8 +244,11 @@ def parse_log(task, path):
         if not las:
             return None
         return {"UAS": float(uas[-1]) if uas else None, "LAS": float(las[-1])}
-    else:  # upos -> best validation UPOS f-score
-        vals = [float(v) for v in RE_UPOS.findall(text)]
+    else:  # upos -> prefer UPOS on the OTA test set; fall back to best validation f-score
+        test = RE_UPOS_TEST.findall(text)
+        if test:
+            return {"UPOS": float(test[-1])}
+        vals = [float(v) for v in RE_UPOS_VALID.findall(text)]
         if not vals:
             return None
         return {"UPOS": max(vals)}
@@ -177,11 +264,16 @@ def _agg(values):
 
 
 def cmd_collect(args):
+    cv = getattr(args, "cv", 0)
     rows = []
     for task, model, train_set in itertools.product(args.tasks, args.models, args.train_sets):
+        if cv and cv > 1:
+            runs = [cv_out_path(task, model, train_set, cv, i) for i in range(cv)]
+        else:
+            runs = [out_path(task, model, train_set, r) for r in args.repeats]
         per_metric = {}
-        for repeat in args.repeats:
-            res = parse_log(task, out_path(task, model, train_set, repeat))
+        for path in runs:
+            res = parse_log(task, path)
             if res:
                 for k, v in res.items():
                     per_metric.setdefault(k, []).append(v)
@@ -227,10 +319,15 @@ def main():
     p_run = sub.add_parser("run", help="run the experiment grid")
     add_filters(p_run)
     p_run.add_argument("--dry-run", action="store_true", help="print commands only")
+    p_run.add_argument("--cv", type=int, default=0, metavar="K",
+                       help="k-fold cross-validation within the training set (e.g. --cv 5); "
+                            "replaces the repeat dimension")
     p_run.set_defaults(func=cmd_run)
 
     p_col = sub.add_parser("collect", help="collect results from existing logs")
     add_filters(p_col)
+    p_col.add_argument("--cv", type=int, default=0, metavar="K",
+                       help="collect k-fold CV logs instead of repeat logs")
     p_col.set_defaults(func=cmd_collect)
 
     args = ap.parse_args()

@@ -33,7 +33,29 @@ def main(config, eval_mode="basic"):
     trainer.train()
 
     if "test" in config["data_loaders"]["paths"]:
-        evaluate_best_trained_model(trainer, config, eval_mode=eval_mode)
+        # conll18/iwpt evaluation needs a dependency tree (HEAD column). Models that only
+        # produce tags (e.g. UPOS) have no heads, so evaluate them with internal tagging
+        # metrics on the test set instead.
+        if {"heads", "labels"} & set(model.outputs.keys()):
+            evaluate_best_trained_model(trainer, config, eval_mode=eval_mode)
+        else:
+            evaluate_best_trained_model_internal(trainer, config, data_loaders["test"])
+
+
+def evaluate_best_trained_model_internal(trainer, config, test_data_loader):
+    """Evaluate a (non-dependency) model on the test set using the model's own internal
+    metrics. Used for tag-only tasks such as POS tagging, where conll18_ud_eval cannot be
+    applied (it requires a valid dependency tree). Logs `<output>_final_test` per output.
+    """
+    checkpoint_path = Path(trainer.checkpoint_dir) / "model_best.pth"
+    trainer._resume_checkpoint(checkpoint_path)
+
+    logger = config.logger
+    logger.info("Evaluation on test set (internal tagging metrics):")
+
+    metrics = trainer.run_epoch(trainer.start_epoch, test_data_loader, training=False)
+    for outp_id in sorted(metrics.keys() - {"_AGGREGATE_", "_loss"}):
+        logger.log_metric(outp_id + "_final_test", metrics[outp_id]["fscore"], percent=True)
 
 
 def evaluate_best_trained_model(trainer, config, eval_mode="basic"):
