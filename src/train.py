@@ -13,6 +13,9 @@ import os
 
 # Newer MLflow refuses the filesystem (./mlruns) tracking backend unless this is set.
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+# Disable MLflow's phone-home telemetry (network calls every epoch, just clutter).
+os.environ.setdefault("MLFLOW_DISABLE_TELEMETRY", "true")
+os.environ.setdefault("DO_NOT_TRACK", "true")
 
 from pathlib import Path
 
