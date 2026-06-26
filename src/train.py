@@ -9,6 +9,10 @@
 """Main script for training a parser based on a configuration file."""
 
 import argparse
+import os
+
+# Newer MLflow refuses the filesystem (./mlruns) tracking backend unless this is set.
+os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 from pathlib import Path
 
