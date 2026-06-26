@@ -32,7 +32,9 @@ class BucketBatchSampler(Sampler):
             size_fn: Function to compute the size of an instance with (default: `len(inst)**2`).
             max_cumsize_per_batch: The maximum cumulative size that a batch is allowed to have.
         """
-        super(BucketBatchSampler, self).__init__(dataset)
+        # torch's Sampler ignores the data_source arg (deprecated), and Python 3.12's
+        # object.__init__ rejects extra args, so call without passing the dataset.
+        super(BucketBatchSampler, self).__init__()
 
         self.batch_size = batch_size
         self.bucket_size = bucket_size
