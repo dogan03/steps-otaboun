@@ -1,0 +1,5 @@
+*.tex
+*.venv/
+experiment_outputs/
+plans/
+data/saved_models/
