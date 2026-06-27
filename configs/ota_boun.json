@@ -80,7 +80,7 @@
         }
       },
 
-      "batch_size": 1,
+      "batch_size": 32,
       "bucket_size": 256,
       "max_tokens_per_batch": 156800,
       "num_workers": 2
