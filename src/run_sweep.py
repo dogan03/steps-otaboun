@@ -25,6 +25,7 @@ Edit the PATHS block below to match your environment (e.g. Colab paths).
 
 import argparse
 import itertools
+import os
 import re
 import statistics
 import subprocess
@@ -59,7 +60,9 @@ TASKS = {
 }
 
 REPEATS = [1, 2, 3]            # the paper reports mean +/- std over 3 runs
-OUTPUT_DIR = Path("experiment_outputs")
+# Where logs/summary/fold files go. Point STEPS_OUTPUT_DIR at a Drive path on Colab so
+# results survive the session (e.g. /content/drive/MyDrive/ota_results).
+OUTPUT_DIR = Path(os.environ.get("STEPS_OUTPUT_DIR", "experiment_outputs"))
 UPOS_VOCAB = "data/corpora/ota_boun/vocab/upos.vocab"
 
 # macOS uses 'spawn' for multiprocessing, which can't pickle the data loader's lambda
