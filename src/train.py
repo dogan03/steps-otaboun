@@ -94,7 +94,10 @@ def evaluate_best_trained_model(trainer, config, eval_mode="basic"):
     else:
         raise Exception(f"Unknown evaluation mode {eval_mode}")
 
-    logger.log_artifact("test-parsed.conllu")
+    try:
+        logger.log_artifact("test-parsed.conllu")
+    except Exception as e:
+        logger.info(f"Skipping artifact logging (non-fatal): {e}")
 
 
 def init_config_modification(raw_modifications):
