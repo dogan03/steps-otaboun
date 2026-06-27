@@ -44,13 +44,13 @@ MODELS = {
 
 # Training corpora for each "train set" axis.
 TRAIN_SETS = {
-    "tr":     "data/corpora/ota_boun/tr_boun-ud-train.conllu",   # modern Turkish only
-    "ota":    "data/corpora/ota_boun/ota_boun-ud-train.conllu",  # historical Turkish only
-    "tr_ota": "data/corpora/ota_boun/best_together.conllu",      # TR + OTA combined
+    "tr":     "data/corpora/ota_boun/tr_boun-ud-train.conllu",     # modern Turkish only
+    "ota":    "data/corpora/ota_boun/ota_boun-train-2026.conllu",  # historical Turkish (2026, 1600 sents)
+    "tr_ota": "data/corpora/ota_boun/best_together.conllu",        # TR + OTA combined
 }
 
 # We always evaluate on the OTA-BOUN (historical) test set.
-TEST_FILE = "data/corpora/ota_boun/ota_boun-ud-test.conllu"
+TEST_FILE = "data/corpora/ota_boun/ota_boun-test-2026.conllu"
 
 # One base config per task. Architecture differs (dep parsing vs sequence tagging),
 # so each task needs its own base config; everything else is overridden per run.
@@ -268,7 +268,10 @@ def _agg(values):
 
 def cmd_collect(args):
     cv = getattr(args, "cv", 0)
-    rows = []
+    label = "fold" if (cv and cv > 1) else "run"
+    csv_lines = ["task,model,train_set,metric,individual,mean_std"]
+    any_found = False
+
     for task, model, train_set in itertools.product(args.tasks, args.models, args.train_sets):
         if cv and cv > 1:
             runs = [cv_out_path(task, model, train_set, cv, i) for i in range(cv)]
@@ -282,22 +285,23 @@ def cmd_collect(args):
                     per_metric.setdefault(k, []).append(v)
         if not per_metric:
             continue
-        rows.append((task, model, train_set, {k: _agg(v) for k, v in per_metric.items()}))
+        any_found = True
 
-    if not rows:
+        print(f"\n=== {task} | {model} | {train_set} ===")
+        n = max(len(v) for v in per_metric.values())
+        # column header: one per fold/run
+        print(f"{'':6} " + " ".join(f"{label+str(i):>8}" for i in range(n)))
+        for metric, vals in per_metric.items():
+            indiv = " ".join(f"{v:>8.2f}" for v in vals)         # individual results (top)
+            print(f"{metric:6} {indiv}")
+            print(f"{'':6} {'mean±std: ' + _agg(vals):>{9 * n}}")  # mean±std (below)
+            csv_lines.append(f"{task},{model},{train_set},{metric}," +
+                             "|".join(f"{v:.2f}" for v in vals) + f",{_agg(vals)}")
+
+    if not any_found:
         print("No results found yet. Run the sweep first (logs go to "
               f"{OUTPUT_DIR}/).")
         return
-
-    metric_cols = ["UAS", "LAS", "UPOS"]
-    header = f"{'task':6} {'model':13} {'train':7} " + " ".join(f"{m:>12}" for m in metric_cols)
-    print(header)
-    print("-" * len(header))
-    csv_lines = ["task,model,train_set," + ",".join(metric_cols)]
-    for task, model, train_set, metrics in rows:
-        cells = [metrics.get(m, "-") for m in metric_cols]
-        print(f"{task:6} {model:13} {train_set:7} " + " ".join(f"{c:>12}" for c in cells))
-        csv_lines.append(f"{task},{model},{train_set}," + ",".join(cells))
 
     summary = OUTPUT_DIR / "summary.csv"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
