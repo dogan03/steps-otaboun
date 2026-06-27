@@ -104,18 +104,23 @@ def build_command(task, model, name, train_file, dev_file):
     ]
 
 
-def _run_to_log(cmd, log_file, dry_run):
-    """Run a command, streaming output to both console and log file."""
+def _run_to_log(cmd, log_file, dry_run, prefix=""):
+    """Run a command, streaming output to both console and log file.
+
+    `prefix` is prepended to every console line (so you can tell which fold/run a line
+    belongs to during a sweep). The log file itself stays clean (no prefix).
+    """
     print(">>", " ".join(cmd))
     print("   log ->", log_file)
     if dry_run:
         return
     log_file.parent.mkdir(parents=True, exist_ok=True)
+    tag = f"[{prefix}] " if prefix else ""
     with open(log_file, "w") as f:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 cwd=REPO_ROOT, text=True, bufsize=1)
         for line in proc.stdout:
-            sys.stdout.write(line)
+            sys.stdout.write(tag + line)
             sys.stdout.flush()
             f.write(line)
         proc.wait()
@@ -197,10 +202,12 @@ def cmd_run(args):
     combos = list(itertools.product(args.tasks, args.models, args.train_sets, args.repeats))
     print(f"{len(combos)} run(s) planned\n")
 
+    total = len(args.repeats)
     for task, model, train_set, repeat in combos:
         name = f"{task}_{model}_{train_set}_{repeat}"
         cmd = build_command(task, model, name, TRAIN_SETS[train_set], TEST_FILE)
-        _run_to_log(cmd, out_path(task, model, train_set, repeat), args.dry_run)
+        prefix = f"{task} {model} {train_set} | run {repeat}/{total}"
+        _run_to_log(cmd, out_path(task, model, train_set, repeat), args.dry_run, prefix=prefix)
 
     if not args.dry_run:
         print()
@@ -222,7 +229,8 @@ def run_cv(args):
         for i, (train_file, dev_file) in enumerate(folds):
             name = f"{task}_{model}_{train_set}_cv{k}_fold{i}"
             cmd = build_command(task, model, name, train_file, dev_file)
-            _run_to_log(cmd, cv_out_path(task, model, train_set, k, i), args.dry_run)
+            prefix = f"{task} {model} {train_set} | fold {i + 1}/{k}"
+            _run_to_log(cmd, cv_out_path(task, model, train_set, k, i), args.dry_run, prefix=prefix)
 
     if not args.dry_run:
         print()
