@@ -204,10 +204,14 @@ def cmd_run(args):
 
     total = len(args.repeats)
     for task, model, train_set, repeat in combos:
+        log_path = out_path(task, model, train_set, repeat)
+        if not args.force and parse_log(task, log_path) is not None:
+            print(f"[skip] {log_path.name} (already done; --force to redo)")
+            continue
         name = f"{task}_{model}_{train_set}_{repeat}"
         cmd = build_command(task, model, name, TRAIN_SETS[train_set], TEST_FILE)
         prefix = f"{task} {model} {train_set} | run {repeat}/{total}"
-        _run_to_log(cmd, out_path(task, model, train_set, repeat), args.dry_run, prefix=prefix)
+        _run_to_log(cmd, log_path, args.dry_run, prefix=prefix)
 
     if not args.dry_run:
         print()
@@ -230,10 +234,14 @@ def run_cv(args):
         fold_dir = REPO_ROOT / "cv_folds" / train_set / f"cv{k}"
         folds = make_folds(TRAIN_SETS[train_set], k, fold_dir)
         for i, (train_file, dev_file) in enumerate(folds):
+            log_path = cv_out_path(task, model, train_set, k, i)
+            if not args.force and parse_log(task, log_path) is not None:
+                print(f"[skip] {log_path.name} (already done; --force to redo)")
+                continue
             name = f"{task}_{model}_{train_set}_cv{k}_fold{i}"
             cmd = build_command(task, model, name, train_file, dev_file)
             prefix = f"{task} {model} {train_set} | fold {i + 1}/{k}"
-            _run_to_log(cmd, cv_out_path(task, model, train_set, k, i), args.dry_run, prefix=prefix)
+            _run_to_log(cmd, log_path, args.dry_run, prefix=prefix)
 
     if not args.dry_run:
         print()
@@ -337,6 +345,9 @@ def main():
     p_run = sub.add_parser("run", help="run the experiment grid")
     add_filters(p_run)
     p_run.add_argument("--dry-run", action="store_true", help="print commands only")
+    p_run.add_argument("--force", action="store_true",
+                       help="re-run folds/runs even if their log already has a result "
+                            "(default: skip completed ones, i.e. resume)")
     p_run.add_argument("--cv", type=int, default=0, metavar="K",
                        help="k-fold cross-validation within the training set (e.g. --cv 5); "
                             "replaces the repeat dimension")
