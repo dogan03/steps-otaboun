@@ -241,7 +241,7 @@ def run_cv(args):
 RE_LAS = re.compile(r"las_final_test:\s*([\d.]+)%")
 RE_UAS = re.compile(r"uas_final_test:\s*([\d.]+)%")
 RE_UPOS_TEST = re.compile(r"upos_final_test:\s*([\d.]+)%")
-RE_UPOS_VALID = re.compile(r"upos-fscore[^:]*:\s*([\d.]+)%")
+RE_UPOS_VALID = re.compile(r"upos-fscore_valid:\s*([\d.]+)%")
 
 
 def parse_log(task, path):
