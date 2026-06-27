@@ -49,8 +49,10 @@ TRAIN_SETS = {
     "tr_ota": "data/corpora/ota_boun/best_together.conllu",        # TR + OTA combined
 }
 
-# We always evaluate on the OTA-BOUN (historical) test set.
-TEST_FILE = "data/corpora/ota_boun/ota_boun-test-2026.conllu"
+# Test set to evaluate on. Default = OTA-BOUN (historical) 2026 test. Override with
+# STEPS_TEST_FILE to evaluate on a different set, e.g. the TR-BOUN test (transfer).
+# When switching test sets, also change STEPS_OUTPUT_DIR so logs don't clash.
+TEST_FILE = os.environ.get("STEPS_TEST_FILE", "data/corpora/ota_boun/ota_boun-test-2026.conllu")
 
 # One base config per task. Architecture differs (dep parsing vs sequence tagging),
 # so each task needs its own base config; everything else is overridden per run.
