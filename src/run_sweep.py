@@ -224,7 +224,10 @@ def run_cv(args):
     print(f"{len(combos)} config(s) x {k} folds = {len(combos) * k} run(s)\n")
 
     for task, model, train_set in combos:
-        fold_dir = OUTPUT_DIR / "cv_folds" / train_set / f"cv{k}"
+        # Fold files go to LOCAL disk, never OUTPUT_DIR -- a Drive (FUSE) mount is flaky
+        # for many small writes and throws FileNotFoundError mid-loop. They're temporary
+        # deterministic splits, so they don't need to persist to Drive.
+        fold_dir = REPO_ROOT / "cv_folds" / train_set / f"cv{k}"
         folds = make_folds(TRAIN_SETS[train_set], k, fold_dir)
         for i, (train_file, dev_file) in enumerate(folds):
             name = f"{task}_{model}_{train_set}_cv{k}_fold{i}"

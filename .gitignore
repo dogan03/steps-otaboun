@@ -3,3 +3,5 @@
 experiment_outputs/
 plans/
 data/saved_models/
+mlruns/
+cv_folds/
