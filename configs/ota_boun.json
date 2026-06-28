@@ -87,8 +87,7 @@
     },
     "paths": {
       "train": "data/corpora/ota_boun/ota_boun-ud-train.conllu",
-      "dev": "data/corpora/ota_boun/ota_boun-ud-test.conllu",
-      "test": "data/corpora/ota_boun/ota_boun-ud-test.conllu"
+      "dev": "data/corpora/ota_boun/ota_boun-ud-test.conllu"
     }
   },
 

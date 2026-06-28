@@ -39,63 +39,60 @@ def main(config, eval_mode="basic"):
 
     trainer.train()
 
-    if "test" in config["data_loaders"]["paths"]:
-        # conll18/iwpt evaluation needs a dependency tree (HEAD column). Models that only
-        # produce tags (e.g. UPOS) have no heads, so evaluate them with internal tagging
-        # metrics on the test set instead.
-        if {"heads", "labels"} & set(model.outputs.keys()):
-            evaluate_best_trained_model(trainer, config, eval_mode=eval_mode)
-        else:
-            evaluate_best_trained_model_internal(trainer, config, data_loaders["test"])
+    # Evaluate the best model on EVERY configured test set in one go (keys "test" or
+    # "test_<name>", e.g. test_ota, test_tr) -- train once, evaluate on both, no retraining.
+    test_keys = [k for k in config["data_loaders"]["paths"] if k == "test" or k.startswith("test_")]
+    if not test_keys:
+        return
 
-
-def evaluate_best_trained_model_internal(trainer, config, test_data_loader):
-    """Evaluate a (non-dependency) model on the test set using the model's own internal
-    metrics. Used for tag-only tasks such as POS tagging, where conll18_ud_eval cannot be
-    applied (it requires a valid dependency tree). Logs `<output>_final_test` per output.
-    """
     checkpoint_path = Path(trainer.checkpoint_dir) / "model_best.pth"
     trainer._resume_checkpoint(checkpoint_path)
 
+    # conll18/iwpt eval needs a dependency tree (HEAD column). Tag-only models (e.g. UPOS)
+    # have no heads, so they are evaluated with the model's internal tagging metrics instead.
+    is_dependency = bool({"heads", "labels"} & set(model.outputs.keys()))
+
+    for test_key in test_keys:
+        name = "test" if test_key == "test" else test_key[len("test_"):]
+        if is_dependency:
+            evaluate_dependency_on_test(trainer, config, test_key, name, eval_mode=eval_mode)
+        else:
+            evaluate_tags_on_test(trainer, config, data_loaders[test_key], name)
+
+
+def evaluate_tags_on_test(trainer, config, test_data_loader, name):
+    """Evaluate a tag-only model (e.g. UPOS) on one test set via the model's internal
+    metrics. Logs `<output>_final_<name>` (e.g. upos_final_ota)."""
     logger = config.logger
-    logger.info("Evaluation on test set (internal tagging metrics):")
+    logger.info(f"Evaluation on test set '{name}' (internal tagging metrics):")
 
     metrics = trainer.run_epoch(trainer.start_epoch, test_data_loader, training=False)
     for outp_id in sorted(metrics.keys() - {"_AGGREGATE_", "_loss"}):
-        logger.log_metric(outp_id + "_final_test", metrics[outp_id]["fscore"], percent=True)
+        logger.log_metric(f"{outp_id}_final_{name}", metrics[outp_id]["fscore"], percent=True)
 
 
-def evaluate_best_trained_model(trainer, config, eval_mode="basic"):
-    """Evaluate the model with best validation performance on test data after training.
-
-    Args:
-        trainer: Trainer used for training the model.
-        config: Model configuration (must contain path to test data).
-        eval_mode: Method to use in evaluation: "basic" for basic UD, "enhanced" for enhanced UD. Default: "basic".
-    """
-    checkpoint_path = Path(trainer.checkpoint_dir) / "model_best.pth"
-    trainer._resume_checkpoint(checkpoint_path)
-
+def evaluate_dependency_on_test(trainer, config, path_key, name, eval_mode="basic"):
+    """Evaluate a dependency model on one test set via conll18/iwpt. Logs uas/las_final_<name>."""
     logger = config.logger
+    logger.info(f"Evaluation on test set '{name}':")
 
-    logger.info("Evaluation on test set:")
-
-    with open(config["data_loaders"]["paths"]["test"], "r") as gold_test_file, \
-         open("test-parsed.conllu", "w") as output_file:
+    test_path = config["data_loaders"]["paths"][path_key]
+    out_path = f"test-parsed-{name}.conllu"
+    with open(test_path, "r") as gold_test_file, open(out_path, "w") as output_file:
         parse_corpus(config, gold_test_file, output_file, parser=trainer.parser)
-        output_file = reset_file(output_file, "test-parsed.conllu")
-        gold_test_file = reset_file(gold_test_file, config["data_loaders"]["paths"]["test"])
+        output_file = reset_file(output_file, out_path)
+        gold_test_file = reset_file(gold_test_file, test_path)
         test_evaluation = run_evaluation(gold_test_file, output_file, mode=eval_mode)
 
     if eval_mode == "basic":
-        logger.log_final_metrics_basic(test_evaluation, suffix="_test")
+        logger.log_final_metrics_basic(test_evaluation, suffix=f"_{name}")
     elif eval_mode == "enhanced":
-        logger.log_final_metrics_enhanced(test_evaluation, suffix="_test")
+        logger.log_final_metrics_enhanced(test_evaluation, suffix=f"_{name}")
     else:
         raise Exception(f"Unknown evaluation mode {eval_mode}")
 
     try:
-        logger.log_artifact("test-parsed.conllu")
+        logger.log_artifact(out_path)
     except Exception as e:
         logger.info(f"Skipping artifact logging (non-fatal): {e}")
 

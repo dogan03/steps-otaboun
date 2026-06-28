@@ -49,10 +49,18 @@ TRAIN_SETS = {
     "tr_ota": "data/corpora/ota_boun/best_together.conllu",        # TR + OTA combined
 }
 
-# Test set to evaluate on. Default = OTA-BOUN (historical) 2026 test. Override with
-# STEPS_TEST_FILE to evaluate on a different set, e.g. the TR-BOUN test (transfer).
-# When switching test sets, also change STEPS_OUTPUT_DIR so logs don't clash.
-TEST_FILE = os.environ.get("STEPS_TEST_FILE", "data/corpora/ota_boun/ota_boun-test-2026.conllu")
+# Test sets EVERY trained model is evaluated on (train once -> eval on all of these, in
+# the same run; no retraining per test set).
+EVAL_TESTS = {
+    "ota": "data/corpora/ota_boun/ota_boun-test-2026.conllu",  # historical Turkish
+    "tr":  "data/corpora/ota_boun/tr_boun-ud-test.conllu",     # modern Turkish
+}
+
+# Dev (early-stopping) set for NON-CV train sets. A train set NOT listed here must be run
+# with --cv (the held-out fold then serves as dev). OTA has no dedicated dev -> use --cv.
+DEV = {
+    "tr": "data/corpora/ota_boun/tr_boun-ud-dev.conllu",
+}
 
 # One base config per task. Architecture differs (dep parsing vs sequence tagging),
 # so each task needs its own base config; everything else is overridden per run.
@@ -84,7 +92,11 @@ def cv_out_path(task, model, train_set, k, fold):
 
 
 def build_command(task, model, name, train_file, dev_file):
-    """Build the train.py command for one run, given explicit train/dev files."""
+    """Build the train.py command for one run, given explicit train/dev files.
+
+    Injects ALL EVAL_TESTS as data_loaders.paths.test_<name> so the model is trained once
+    and evaluated on every test set.
+    """
     spec = TASKS[task]
 
     mods = [
@@ -95,8 +107,8 @@ def build_command(task, model, name, train_file, dev_file):
         f"data_loaders.paths.dev={dev_file}",
         f"data_loaders.args.num_workers={NUM_WORKERS}",
     ]
-    if spec["with_test"]:
-        mods.append(f"data_loaders.paths.test={TEST_FILE}")
+    for tname, tpath in EVAL_TESTS.items():
+        mods.append(f"data_loaders.paths.test_{tname}={tpath}")
 
     # `-e` before `-m` because `-m` is nargs='+' and would otherwise swallow it.
     return [
@@ -206,12 +218,16 @@ def cmd_run(args):
 
     total = len(args.repeats)
     for task, model, train_set, repeat in combos:
+        if train_set not in DEV:
+            sys.exit(f"No dev set defined for train set '{train_set}'. "
+                     f"Use --cv (e.g. --cv 5) so a held-out fold serves as dev, "
+                     f"or add it to the DEV dict.")
         log_path = out_path(task, model, train_set, repeat)
-        if not args.force and parse_log(task, log_path) is not None:
+        if not args.force and is_done(task, log_path):
             print(f"[skip] {log_path.name} (already done; --force to redo)")
             continue
         name = f"{task}_{model}_{train_set}_{repeat}"
-        cmd = build_command(task, model, name, TRAIN_SETS[train_set], TEST_FILE)
+        cmd = build_command(task, model, name, TRAIN_SETS[train_set], DEV[train_set])
         prefix = f"{task} {model} {train_set} | run {repeat}/{total}"
         _run_to_log(cmd, log_path, args.dry_run, prefix=prefix)
 
@@ -237,7 +253,7 @@ def run_cv(args):
         folds = make_folds(TRAIN_SETS[train_set], k, fold_dir)
         for i, (train_file, dev_file) in enumerate(folds):
             log_path = cv_out_path(task, model, train_set, k, i)
-            if not args.force and parse_log(task, log_path) is not None:
+            if not args.force and is_done(task, log_path):
                 print(f"[skip] {log_path.name} (already done; --force to redo)")
                 continue
             name = f"{task}_{model}_{train_set}_cv{k}_fold{i}"
@@ -250,32 +266,40 @@ def run_cv(args):
         cmd_collect(args)
 
 
-# Patterns for the metrics train.py prints to the log.
-RE_LAS = re.compile(r"las_final_test:\s*([\d.]+)%")
-RE_UAS = re.compile(r"uas_final_test:\s*([\d.]+)%")
-RE_UPOS_TEST = re.compile(r"upos_final_test:\s*([\d.]+)%")
-RE_UPOS_VALID = re.compile(r"upos-fscore_valid:\s*([\d.]+)%")
-
-
 def parse_log(task, path):
-    """Return the headline metric(s) from one log file, or None if not found."""
+    """Return a dict of metrics from one log file (keyed METRIC_<testname>), or None.
+
+    e.g. parse -> {"UAS_ota": .., "LAS_ota": .., "UAS_tr": .., "LAS_tr": ..}
+         upos  -> {"UPOS_ota": .., "UPOS_tr": ..}
+    """
     if not path.exists():
         return None
     text = path.read_text(errors="ignore")
-    if task == "parse":
-        las = RE_LAS.findall(text)
-        uas = RE_UAS.findall(text)
-        if not las:
-            return None
-        return {"UAS": float(uas[-1]) if uas else None, "LAS": float(las[-1])}
-    else:  # upos -> prefer UPOS on the OTA test set; fall back to best validation f-score
-        test = RE_UPOS_TEST.findall(text)
-        if test:
-            return {"UPOS": float(test[-1])}
-        vals = [float(v) for v in RE_UPOS_VALID.findall(text)]
-        if not vals:
-            return None
-        return {"UPOS": max(vals)}
+    out = {}
+    for name in EVAL_TESTS:
+        if task == "parse":
+            uas = re.findall(rf"uas_final_{name}:\s*([\d.]+)%", text)
+            las = re.findall(rf"las_final_{name}:\s*([\d.]+)%", text)
+            if uas:
+                out[f"UAS_{name}"] = float(uas[-1])
+            if las:
+                out[f"LAS_{name}"] = float(las[-1])
+        else:
+            upos = re.findall(rf"upos_final_{name}:\s*([\d.]+)%", text)
+            if upos:
+                out[f"UPOS_{name}"] = float(upos[-1])
+    return out or None
+
+
+def is_done(task, path):
+    """A run is complete only once the LAST eval test's metric is in its log (evals run
+    sequentially, so the last one present means all of them ran)."""
+    res = parse_log(task, path)
+    if not res:
+        return False
+    last = list(EVAL_TESTS)[-1]
+    key = f"LAS_{last}" if task == "parse" else f"UPOS_{last}"
+    return key in res
 
 
 def _agg(values):
@@ -290,7 +314,7 @@ def _agg(values):
 def cmd_collect(args):
     cv = getattr(args, "cv", 0)
     label = "fold" if (cv and cv > 1) else "run"
-    csv_lines = ["task,model,train_set,metric,individual,mean_std"]
+    csv_lines = ["task,model,train_set,test,metric,individual,mean_std"]
     any_found = False
 
     for task, model, train_set in itertools.product(args.tasks, args.models, args.train_sets):
@@ -298,26 +322,31 @@ def cmd_collect(args):
             runs = [cv_out_path(task, model, train_set, cv, i) for i in range(cv)]
         else:
             runs = [out_path(task, model, train_set, r) for r in args.repeats]
-        per_metric = {}
+        per_key = {}
         for path in runs:
             res = parse_log(task, path)
             if res:
                 for k, v in res.items():
-                    per_metric.setdefault(k, []).append(v)
-        if not per_metric:
+                    per_key.setdefault(k, []).append(v)
+        if not per_key:
             continue
         any_found = True
 
         print(f"\n=== {task} | {model} | {train_set} ===")
-        n = max(len(v) for v in per_metric.values())
-        # column header: one per fold/run
-        print(f"{'':6} " + " ".join(f"{label+str(i):>8}" for i in range(n)))
-        for metric, vals in per_metric.items():
-            indiv = " ".join(f"{v:>8.2f}" for v in vals)         # individual results (top)
-            print(f"{metric:6} {indiv}")
-            print(f"{'':6} {'mean±std: ' + _agg(vals):>{9 * n}}")  # mean±std (below)
-            csv_lines.append(f"{task},{model},{train_set},{metric}," +
-                             "|".join(f"{v:.2f}" for v in vals) + f",{_agg(vals)}")
+        # group by test set: each key is METRIC_<testname>
+        for test_name in EVAL_TESTS:
+            keys = [k for k in per_key if k.endswith(f"_{test_name}")]
+            if not keys:
+                continue
+            n = max(len(per_key[k]) for k in keys)
+            print(f"  test={test_name:4} " + " ".join(f"{label+str(i):>8}" for i in range(n)) + "    mean±std")
+            for k in keys:
+                metric = k.rsplit("_", 1)[0]          # UAS / LAS / UPOS
+                vals = per_key[k]
+                indiv = " ".join(f"{v:>8.2f}" for v in vals)
+                print(f"    {metric:5} {indiv}   {_agg(vals)}")
+                csv_lines.append(f"{task},{model},{train_set},{test_name},{metric}," +
+                                 "|".join(f"{v:.2f}" for v in vals) + f",{_agg(vals)}")
 
     if not any_found:
         print("No results found yet. Run the sweep first (logs go to "
