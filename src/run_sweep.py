@@ -37,9 +37,12 @@ from pathlib import Path
 # --------------------------------------------------------------------------------------
 # IMPORTANT: the folder name must match its CONTENT. A BERTurk vocab is ~32k; mBERT is
 # ~119k. Do not save mBERT into a folder called "...turkish..." (that was the old bug).
+# model name -> (path, embeddings wrapper class). The wrapper must match the model family
+# (BERT-based -> BertWrapper, XLM-R -> XLMRobertaWrapper).
 MODELS = {
-    "berturk":      "data/pretrained_embeddings/bert-base-turkish-cased",
-    "multilingual": "data/pretrained_embeddings/bert-base-multilingual-cased",
+    "berturk":      ("data/pretrained_embeddings/bert-base-turkish-cased", "BertWrapper"),
+    "multilingual": ("data/pretrained_embeddings/bert-base-multilingual-cased", "BertWrapper"),
+    "xlmr":         ("data/pretrained_embeddings/xlm-roberta-base", "XLMRobertaWrapper"),
 }
 
 # Training corpora for each "train set" axis.
@@ -98,11 +101,13 @@ def build_command(task, model, name, train_file, dev_file):
     and evaluated on every test set.
     """
     spec = TASKS[task]
+    model_path, wrapper = MODELS[model]
 
     mods = [
         f"experiment={task}",
         f"name={name}",
-        f"model.args.embeddings_processor.args.model_path={MODELS[model]}",
+        f"model.args.embeddings_processor.type={wrapper}",
+        f"model.args.embeddings_processor.args.model_path={model_path}",
         f"data_loaders.paths.train={train_file}",
         f"data_loaders.paths.dev={dev_file}",
         f"data_loaders.args.num_workers={NUM_WORKERS}",
