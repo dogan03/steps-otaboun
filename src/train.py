@@ -57,18 +57,30 @@ def main(config, eval_mode="basic"):
         if is_dependency:
             evaluate_dependency_on_test(trainer, config, test_key, name, eval_mode=eval_mode)
         else:
-            evaluate_tags_on_test(trainer, config, data_loaders[test_key], name)
+            evaluate_tags_on_test(trainer, config, data_loaders[test_key], name,
+                                  config["data_loaders"]["paths"][test_key])
 
 
-def evaluate_tags_on_test(trainer, config, test_data_loader, name):
+def evaluate_tags_on_test(trainer, config, test_data_loader, name, test_path):
     """Evaluate a tag-only model (e.g. UPOS) on one test set via the model's internal
-    metrics. Logs `<output>_final_<name>` (e.g. upos_final_ota)."""
+    metrics. Logs `<output>_final_<name>` (e.g. upos_final_ota) and writes the model's
+    tag predictions to `test-pos-<name>.conllu` (for inspection / error analysis)."""
     logger = config.logger
     logger.info(f"Evaluation on test set '{name}' (internal tagging metrics):")
 
     metrics = trainer.run_epoch(trainer.start_epoch, test_data_loader, training=False)
     for outp_id in sorted(metrics.keys() - {"_AGGREGATE_", "_loss"}):
         logger.log_metric(f"{outp_id}_final_{name}", metrics[outp_id]["fscore"], percent=True)
+
+    # Write the predicted tags to a CoNLL-U file so they can be sent/inspected.
+    out_path = f"test-pos-{name}.conllu"
+    with open(test_path, "r") as gold_file, open(out_path, "w") as output_file:
+        parse_corpus(config, gold_file, output_file, parser=trainer.parser)
+    logger.info(f"Wrote tag predictions to {out_path}")
+    try:
+        logger.log_artifact(out_path)
+    except Exception as e:
+        logger.info(f"Skipping artifact logging (non-fatal): {e}")
 
 
 def evaluate_dependency_on_test(trainer, config, path_key, name, eval_mode="basic"):
