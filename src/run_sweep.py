@@ -257,6 +257,8 @@ def run_cv(args):
         fold_dir = REPO_ROOT / "cv_folds" / train_set / f"cv{k}"
         folds = make_folds(TRAIN_SETS[train_set], k, fold_dir)
         for i, (train_file, dev_file) in enumerate(folds):
+            if getattr(args, "folds", None) and i not in args.folds:
+                continue
             log_path = cv_out_path(task, model, train_set, k, i)
             if not args.force and is_done(task, log_path):
                 print(f"[skip] {log_path.name} (already done; --force to redo)")
@@ -387,6 +389,8 @@ def main():
     p_run.add_argument("--cv", type=int, default=0, metavar="K",
                        help="k-fold cross-validation within the training set (e.g. --cv 5); "
                             "replaces the repeat dimension")
+    p_run.add_argument("--folds", nargs="+", type=int, default=None, metavar="I",
+                       help="with --cv: run only these fold indices (e.g. --folds 0)")
     p_run.set_defaults(func=cmd_run)
 
     p_col = sub.add_parser("collect", help="collect results from existing logs")

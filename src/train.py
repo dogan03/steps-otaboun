@@ -73,7 +73,7 @@ def evaluate_tags_on_test(trainer, config, test_data_loader, name, test_path):
         logger.log_metric(f"{outp_id}_final_{name}", metrics[outp_id]["fscore"], percent=True)
 
     # Write the predicted tags to a CoNLL-U file so they can be sent/inspected.
-    out_path = f"test-pos-{name}.conllu"
+    out_path = _prediction_path(config, name, kind="pos")
     with open(test_path, "r") as gold_file, open(out_path, "w") as output_file:
         parse_corpus(config, gold_file, output_file, parser=trainer.parser)
     logger.info(f"Wrote tag predictions to {out_path}")
@@ -83,13 +83,22 @@ def evaluate_tags_on_test(trainer, config, test_data_loader, name, test_path):
         logger.info(f"Skipping artifact logging (non-fatal): {e}")
 
 
+def _prediction_path(config, test_name, kind):
+    """Unique, persistent path for a run's prediction file: includes the run name so CV
+    folds don't overwrite each other, and goes under STEPS_OUTPUT_DIR (e.g. Drive) when
+    that is set, so predictions survive the session."""
+    pred_dir = Path(os.environ.get("STEPS_OUTPUT_DIR", ".")) / "predictions"
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    return str(pred_dir / f"{config['name']}-{test_name}-{kind}.conllu")
+
+
 def evaluate_dependency_on_test(trainer, config, path_key, name, eval_mode="basic"):
     """Evaluate a dependency model on one test set via conll18/iwpt. Logs uas/las_final_<name>."""
     logger = config.logger
     logger.info(f"Evaluation on test set '{name}':")
 
     test_path = config["data_loaders"]["paths"][path_key]
-    out_path = f"test-parsed-{name}.conllu"
+    out_path = _prediction_path(config, name, kind="parsed")
     with open(test_path, "r") as gold_test_file, open(out_path, "w") as output_file:
         parse_corpus(config, gold_test_file, output_file, parser=trainer.parser)
         output_file = reset_file(output_file, out_path)
