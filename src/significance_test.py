@@ -44,7 +44,10 @@ def read_conllu(path):
             cols = line.split("\t")
             if "-" in cols[0] or "." in cols[0]:
                 continue
-            current.append((cols[1], cols[3], cols[6], cols[7]))
+            # Match conll18_ud_eval: LAS ignores language-specific deprel subtypes
+            # (e.g. "obl:tmod" -> "obl"), so strip everything after the first colon.
+            deprel = cols[7].split(":")[0]
+            current.append((cols[1], cols[3], cols[6], deprel))
     if current:
         sentences.append(current)
     return sentences
