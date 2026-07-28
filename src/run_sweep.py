@@ -111,6 +111,9 @@ def build_command(task, model, name, train_file, dev_file):
         f"data_loaders.paths.train={train_file}",
         f"data_loaders.paths.dev={dev_file}",
         f"data_loaders.args.num_workers={NUM_WORKERS}",
+        # Save the model checkpoint (model_best.pth) under STEPS_OUTPUT_DIR so it persists
+        # to Drive across sessions -- otherwise the trained model is lost when Colab resets.
+        f"trainer.save_dir={OUTPUT_DIR}/saved_models",
     ]
     for tname, tpath in EVAL_TESTS.items():
         mods.append(f"data_loaders.paths.test_{tname}={tpath}")
