@@ -39,6 +39,8 @@ from util.conll18_ud_eval import evaluate, load_conllu_file
 MACHAMP_REPO = "https://github.com/machamp-nlp/machamp.git"
 MACHAMP_COMMIT = "4048c34b37796aa496624b68b3530183dc61a690"  # master, 2026-06-03
 MACHAMP_DIR = REPO_ROOT / "third_party" / "machamp"
+# Applied on top of MACHAMP_COMMIT: early stopping ("patience"/"min_epochs" in params.training).
+PATCHES = [REPO_ROOT / "patches" / "machamp-early-stopping.patch"]
 # Hyperparameter configs: configs/machamp/<name>.json, chosen with --params (default "params").
 PARAMS_DIR = REPO_ROOT / "configs" / "machamp"
 DEFAULT_PARAMS = "params"
@@ -234,11 +236,22 @@ def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
     shutil.rmtree(work, ignore_errors=True)
 
 
-def cmd_setup(args):
+def ensure_machamp():
+    """Clone MaChAmp at the pinned commit and apply our patches (idempotent)."""
     if not MACHAMP_DIR.exists():
         subprocess.run(["git", "clone", "-q", MACHAMP_REPO, str(MACHAMP_DIR)], check=True)
-    subprocess.run(["git", "-C", str(MACHAMP_DIR), "checkout", "-q", MACHAMP_COMMIT], check=True)
-    print(f"MaChAmp ready at {MACHAMP_DIR} ({MACHAMP_COMMIT[:10]})")
+    git = ["git", "-C", str(MACHAMP_DIR)]
+    for patch in PATCHES:
+        applied = subprocess.run(git + ["apply", "--reverse", "--check", str(patch)],
+                                 capture_output=True).returncode == 0
+        if not applied:
+            subprocess.run(git + ["checkout", "-q", "-f", MACHAMP_COMMIT], check=True)
+            subprocess.run(git + ["apply", str(patch)], check=True)
+
+
+def cmd_setup(args):
+    ensure_machamp()
+    print(f"MaChAmp ready at {MACHAMP_DIR} ({MACHAMP_COMMIT[:10]} + {len(PATCHES)} patch)")
 
 
 def _splits(train_set, k):
@@ -252,8 +265,7 @@ def _splits(train_set, k):
 
 
 def cmd_run(args):
-    if not (MACHAMP_DIR / "train.py").exists():
-        sys.exit("MaChAmp not found; run `python src/run_machamp.py setup` first.")
+    ensure_machamp()
     k = max(args.cv, 1)
     for params_name, model, train_set in itertools.product(args.params, args.models, args.train_sets):
         args.params_name = params_name

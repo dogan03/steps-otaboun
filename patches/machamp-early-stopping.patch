@@ -1,0 +1,28 @@
+diff --git a/machamp/model/trainer.py b/machamp/model/trainer.py
+index e0b922f..5a0a720 100644
+--- a/machamp/model/trainer.py
++++ b/machamp/model/trainer.py
+@@ -261,6 +261,23 @@ def train(
+             callback.add_dev_results(epoch, total_dev_losses, dev_metrics)
+         callback.end_epoch(epoch, model)
+ 
++        # [steps-otaboun] Early stopping as in STEPS: stop once the dev score has not improved
++        # for more than `patience` epochs (and at least `min_epochs` were run). num_epochs is then
++        # only the maximum; the best epoch is linked as model.pt like at the end of normal training.
++        patience = parameters_config['training'].get('patience')
++        if patience is not None and len(dev_dataset) > 0 and epoch < parameters_config['training']['num_epochs']:
++            best_epoch = max(callback.sums, key=callback.sums.get)
++            if epoch - best_epoch > patience and epoch >= parameters_config['training'].get('min_epochs', 0):
++                logger.info('Early stopping: dev score did not improve for ' + str(epoch - best_epoch) +
++                            ' epochs (best epoch ' + str(best_epoch) + ').')
++                callback.link_model(best_epoch)
++                # metrics.json is normally only written after the last epoch; the per-epoch file
++                # of this epoch already holds the best-so-far scores.
++                last_metrics = os.path.join(serialization_dir, 'metrics_epoch_' + str(epoch - 1) + '.json')
++                json.dump(json.load(open(last_metrics)), open(os.path.join(serialization_dir, 'metrics.json'), 'w'),
++                          indent=4)
++                break
++
+         estimated_total_time = (datetime.datetime.now() - callback.epoch_start_time).seconds * \
+                                parameters_config['training']['num_epochs']
+         # We only save the training state if training takes longer than 45 minutes, because it is quite disk

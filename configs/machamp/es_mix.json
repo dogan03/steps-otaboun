@@ -32,12 +32,12 @@
   "training": {
     "keep_top_n": 1,
     "learning_rate_scheduler": {
-      "cut_frac": 0.3,
+      "cut_frac": 0.03,
       "decay_factor": 0.38,
       "discriminative_fine_tuning": true,
       "gradual_unfreezing": true
     },
-    "num_epochs": 40,
+    "num_epochs": 300,
     "optimizer": {
       "betas": [
         0.9,
@@ -45,6 +45,8 @@
       ],
       "lr": 0.0001,
       "weight_decay": 0.01
-    }
+    },
+    "patience": 15,
+    "min_epochs": 15
   }
 }
