@@ -39,7 +39,9 @@ from util.conll18_ud_eval import evaluate, load_conllu_file
 MACHAMP_REPO = "https://github.com/machamp-nlp/machamp.git"
 MACHAMP_COMMIT = "4048c34b37796aa496624b68b3530183dc61a690"  # master, 2026-06-03
 MACHAMP_DIR = REPO_ROOT / "third_party" / "machamp"
-PARAMS = REPO_ROOT / "configs" / "machamp" / "params.json"
+# Hyperparameter configs: configs/machamp/<name>.json, chosen with --params (default "params").
+PARAMS_DIR = REPO_ROOT / "configs" / "machamp"
+DEFAULT_PARAMS = "params"
 # Local scratch space for training (per-epoch checkpoints stay off Drive).
 WORK_ROOT = REPO_ROOT / "machamp_work"
 
@@ -59,9 +61,16 @@ MODEL_FILES = ["model.pt", "log.txt", "metrics.json", "params-config.json", "dat
                "scalars.json"]
 
 
-def run_dir(model, train_set, k, fold, seed):
+def run_dir(model, train_set, k, fold, seed, params, epochs=None):
+    """One folder per run. Non-default params configs and --epochs overrides get their own
+    suffix, so e.g. a 1-epoch test never lands in (and blocks) the real run's folder."""
     split = f"cv{k}_fold{fold}" if k > 1 else "dev"
-    return OUTPUT_DIR / "machamp" / f"{model}_{train_set}_{split}_seed{seed}"
+    name = f"{model}_{train_set}_{split}_seed{seed}"
+    if params != DEFAULT_PARAMS:
+        name += f"_{params}"
+    if epochs:
+        name += f"_ep{epochs}"
+    return OUTPUT_DIR / "machamp" / name
 
 
 def _is_word(line):
@@ -99,7 +108,23 @@ def restore_multiwords(gold_path, machamp_pred, out_path):
     assert next(pred, None) is None, "prediction has more words than gold"
 
 
-def write_configs(cfg_dir, model, train_file, dev_file, epochs):
+def load_params(name, model, epochs):
+    """Load configs/machamp/<name>.json for one model. `"layers_to_use": "all"` in a decoder
+    expands to every hidden layer of that encoder (embeddings + all transformer layers,
+    combined with a learned scalar mix, like STEPS)."""
+    params = json.loads((PARAMS_DIR / f"{name}.json").read_text())
+    params["transformer_model"] = MODELS[model]
+    if epochs:
+        params["training"]["num_epochs"] = epochs
+    for dec in params["decoders"].values():
+        if dec.get("layers_to_use") == "all":
+            from transformers import AutoConfig
+            n = AutoConfig.from_pretrained(MODELS[model]).num_hidden_layers
+            dec["layers_to_use"] = list(range(n + 1))
+    return params
+
+
+def write_configs(cfg_dir, model, train_file, dev_file, args):
     """Write the MaChAmp dataset + parameter configs for one run; return their paths."""
     dataset_cfg = {
         "UD": {
@@ -112,11 +137,7 @@ def write_configs(cfg_dir, model, train_file, dev_file, epochs):
             },
         }
     }
-    params = json.loads(PARAMS.read_text())
-    params["transformer_model"] = MODELS[model]
-    if epochs:
-        params["training"]["num_epochs"] = epochs
-
+    params = load_params(args.params_name, model, args.epochs)
     dataset_path, params_path = cfg_dir / "dataset.json", cfg_dir / "params.json"
     dataset_path.write_text(json.dumps(dataset_cfg, indent=2))
     params_path.write_text(json.dumps(params, indent=2))
@@ -142,7 +163,7 @@ def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     strip_multiwords(train_file, work / "data" / "train.conllu")
     strip_multiwords(dev_file, work / "data" / "dev.conllu")
     dataset_path, params_path = write_configs(work, model, work / "data" / "train.conllu",
-                                              work / "data" / "dev.conllu", args.epochs)
+                                              work / "data" / "dev.conllu", args)
 
     cmd = [sys.executable, str(MACHAMP_DIR / "train.py"),
            "--dataset_configs", str(dataset_path), "--parameters_config", str(params_path),
@@ -176,12 +197,23 @@ def predict_and_score(rdir, work, args, prefix):
         restore_multiwords(tpath, raw_pred, pred)
         results[tname] = score(tpath, pred)
         print(f"[{prefix}] test={tname}: " + "  ".join(f"{m} {v:.2f}" for m, v in results[tname].items()))
+    results["dev"] = dev_scores(rdir)
     return results
 
 
+def dev_scores(rdir):
+    """Best-epoch dev scores from MaChAmp's metrics.json, for choosing hyperparameters without
+    looking at the test set. (MaChAmp's LAS counts deprel subtypes, unlike conll18.)"""
+    m = json.loads((rdir / "model" / "metrics.json").read_text())
+    return {"LAS": round(100 * m["best_dev_dependency_las"], 2),
+            "UPOS": round(100 * m["best_dev_upos_accuracy"], 2),
+            "best_epoch": m["best_epoch"]}
+
+
 def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
-    rdir = run_dir(model, train_set, k, fold, seed)
-    prefix = f"machamp {model} {train_set} | fold {fold + 1}/{k} seed {seed}"
+    rdir = run_dir(model, train_set, k, fold, seed, args.params_name, args.epochs)
+    tag = "" if args.params_name == DEFAULT_PARAMS else f" [{args.params_name}]"
+    prefix = f"machamp {model}{tag} {train_set} | fold {fold + 1}/{k} seed {seed}"
     if (rdir / "results.json").exists() and not args.force:
         print(f"[skip] {rdir.name} (done; --force to redo)")
         return
@@ -223,7 +255,8 @@ def cmd_run(args):
     if not (MACHAMP_DIR / "train.py").exists():
         sys.exit("MaChAmp not found; run `python src/run_machamp.py setup` first.")
     k = max(args.cv, 1)
-    for model, train_set in itertools.product(args.models, args.train_sets):
+    for params_name, model, train_set in itertools.product(args.params, args.models, args.train_sets):
+        args.params_name = params_name
         for fold, train_file, dev_file in _splits(train_set, k):
             if args.folds is not None and fold not in args.folds:
                 continue
@@ -235,20 +268,29 @@ def cmd_run(args):
 
 def cmd_collect(args):
     k = max(args.cv, 1)
-    lines = ["model,train_set,test,metric,individual,mean_std"]
-    for model, train_set in itertools.product(args.models, args.train_sets):
-        runs = [run_dir(model, train_set, k, fold, seed) / "results.json"
+    epochs = getattr(args, "epochs", None)
+    lines = ["params,model,train_set,test,metric,individual,mean_std"]
+    for params_name, model, train_set in itertools.product(args.params, args.models, args.train_sets):
+        runs = [run_dir(model, train_set, k, fold, seed, params_name, epochs) / "results.json"
                 for fold in range(k) for seed in args.seeds]
-        done = [json.loads(p.read_text()) for p in runs if p.exists()]
+        done = []
+        for p in runs:
+            if p.exists():
+                r = json.loads(p.read_text())
+                if "dev" not in r and (p.parent / "model" / "metrics.json").exists():
+                    r["dev"] = dev_scores(p.parent)  # runs finished before dev scores were recorded
+                done.append(r)
         if not done:
             continue
-        print(f"\n=== machamp | {model} | {train_set} ({len(done)}/{len(runs)} runs done) ===")
-        for tname in EVAL_TESTS:
-            for m in METRICS:
-                vals = [r[tname][m] for r in done if tname in r]
-                print(f"  test={tname:4} {m:5} " + " ".join(f"{v:6.2f}" for v in vals) + f"   {_agg(vals)}")
-                lines.append(f"{model},{train_set},{tname},{m}," + "|".join(f"{v:.2f}" for v in vals)
-                             + f",{_agg(vals)}")
+        print(f"\n=== machamp [{params_name}] | {model} | {train_set} ({len(done)}/{len(runs)} runs done) ===")
+        for tname in [*EVAL_TESTS, "dev"]:
+            for m in METRICS + ["best_epoch"]:
+                vals = [r[tname][m] for r in done if m in r.get(tname, {})]
+                if not vals:
+                    continue
+                print(f"  {tname:4} {m:10} " + " ".join(f"{v:6.2f}" for v in vals) + f"   {_agg(vals)}")
+                lines.append(f"{params_name},{model},{train_set},{tname},{m},"
+                             + "|".join(f"{v:.2f}" for v in vals) + f",{_agg(vals)}")
     summary = OUTPUT_DIR / "machamp" / "summary.csv"
     summary.parent.mkdir(parents=True, exist_ok=True)
     summary.write_text("\n".join(lines) + "\n")
@@ -265,6 +307,9 @@ def main():
         p.add_argument("--train-sets", nargs="+", default=["ota"], choices=list(TRAIN_SETS))
         p.add_argument("--cv", type=int, default=5, metavar="K", help="k-fold CV (default 5; 0/1 = dev set)")
         p.add_argument("--seeds", nargs="+", type=int, default=[SEED], help=f"one run per seed (default {SEED})")
+        p.add_argument("--params", nargs="+", default=[DEFAULT_PARAMS],
+                       choices=sorted(p.stem for p in PARAMS_DIR.glob("*.json")),
+                       help="hyperparameter config(s) from configs/machamp/ (default: params)")
 
     p_run = sub.add_parser("run", help="train + predict + score (resumes by default)")
     add_filters(p_run)
