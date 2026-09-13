@@ -8,6 +8,12 @@ conll18_ud_eval (UPOS / UAS / LAS, same scorer as the STEPS results).
 CV folds, train sets and OUTPUT_DIR (STEPS_OUTPUT_DIR) are shared with run_sweep.py, so the
 folds are identical to the STEPS experiments.
 
+Resuming: every run (model x train set x fold x seed) lives in its own folder under
+OUTPUT_DIR/machamp/ (point STEPS_OUTPUT_DIR at Drive on Colab). Re-running the same command
+skips finished runs (results.json), only re-predicts runs whose model is already saved, and
+retrains a run that was interrupted mid-training from its first epoch. Checkpoints are written
+to local disk while training and copied to OUTPUT_DIR once the run's training finishes.
+
 MaChAmp needs its own environment (transformers>=4,<5), separate from STEPS (transformers 3.1.0).
 
 Usage:
@@ -20,6 +26,7 @@ Usage:
 import argparse
 import itertools
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +40,8 @@ MACHAMP_REPO = "https://github.com/machamp-nlp/machamp.git"
 MACHAMP_COMMIT = "4048c34b37796aa496624b68b3530183dc61a690"  # master, 2026-06-03
 MACHAMP_DIR = REPO_ROOT / "third_party" / "machamp"
 PARAMS = REPO_ROOT / "configs" / "machamp" / "params.json"
+# Local scratch space for training (per-epoch checkpoints stay off Drive).
+WORK_ROOT = REPO_ROOT / "machamp_work"
 
 # model name -> HuggingFace id (loaded with AutoModel/AutoTokenizer, so the tokenizer settings
 # come from the hub; avoids the local folder's missing tokenizer_config.json).
@@ -44,11 +53,15 @@ MODELS = {
 
 EVAL_TESTS = {"ota": STEPS_EVAL_TESTS["ota"]}
 METRICS = ["UPOS", "UAS", "LAS"]
-SEED = 8446  # MaChAmp's default seed, fixed for every run
+SEED = 8446  # MaChAmp's default seed
+# Files kept from MaChAmp's model dir (model.pt is the best epoch on dev).
+MODEL_FILES = ["model.pt", "log.txt", "metrics.json", "params-config.json", "dataset-configs.json",
+               "scalars.json"]
 
 
-def run_dir(model, train_set, k, fold):
-    return OUTPUT_DIR / "machamp" / f"{model}_{train_set}_cv{k}_fold{fold}"
+def run_dir(model, train_set, k, fold, seed):
+    split = f"cv{k}_fold{fold}" if k > 1 else "dev"
+    return OUTPUT_DIR / "machamp" / f"{model}_{train_set}_{split}_seed{seed}"
 
 
 def _is_word(line):
@@ -86,7 +99,7 @@ def restore_multiwords(gold_path, machamp_pred, out_path):
     assert next(pred, None) is None, "prediction has more words than gold"
 
 
-def write_configs(rdir, model, train_file, dev_file, epochs):
+def write_configs(cfg_dir, model, train_file, dev_file, epochs):
     """Write the MaChAmp dataset + parameter configs for one run; return their paths."""
     dataset_cfg = {
         "UD": {
@@ -104,10 +117,16 @@ def write_configs(rdir, model, train_file, dev_file, epochs):
     if epochs:
         params["training"]["num_epochs"] = epochs
 
-    dataset_path, params_path = rdir / "dataset.json", rdir / "params.json"
+    dataset_path, params_path = cfg_dir / "dataset.json", cfg_dir / "params.json"
     dataset_path.write_text(json.dumps(dataset_cfg, indent=2))
     params_path.write_text(json.dumps(params, indent=2))
     return dataset_path, params_path
+
+
+def _write_json_atomic(path, obj):
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, path)
 
 
 def score(gold_path, pred_path):
@@ -115,47 +134,72 @@ def score(gold_path, pred_path):
     return {m: round(100 * ev[m].f1, 2) for m in METRICS}
 
 
-def run_one(model, train_set, k, fold, train_file, dev_file, args):
-    rdir = run_dir(model, train_set, k, fold)
-    results_path = rdir / "results.json"
-    if results_path.exists() and not args.force:
-        print(f"[skip] {rdir.name} (already done; --force to redo)")
-        return
-    prefix = f"machamp {model} {train_set} | fold {fold + 1}/{k}"
-    if args.dry_run:
-        print(f">> [{prefix}] would train in {rdir}")
-        return
+def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
+    """Train in the local work dir, then copy the best model + logs into rdir/model."""
+    if work.exists():
+        shutil.rmtree(work)
+    (work / "data").mkdir(parents=True)
+    strip_multiwords(train_file, work / "data" / "train.conllu")
+    strip_multiwords(dev_file, work / "data" / "dev.conllu")
+    dataset_path, params_path = write_configs(work, model, work / "data" / "train.conllu",
+                                              work / "data" / "dev.conllu", args.epochs)
 
-    # MaChAmp refuses an existing model dir, so a crashed/forced run starts from scratch.
-    if rdir.exists():
-        shutil.rmtree(rdir)
-    data_dir = rdir / "data"
-    data_dir.mkdir(parents=True)
-    strip_multiwords(train_file, data_dir / "train.conllu")
-    strip_multiwords(dev_file, data_dir / "dev.conllu")
-    dataset_path, params_path = write_configs(rdir, model, data_dir / "train.conllu",
-                                              data_dir / "dev.conllu", args.epochs)
-    model_dir = rdir / "model"
+    cmd = [sys.executable, str(MACHAMP_DIR / "train.py"),
+           "--dataset_configs", str(dataset_path), "--parameters_config", str(params_path),
+           "--model_dir", str(work / "model"), "--device", str(args.device), "--seed", str(seed)]
+    rc = _run_to_log(cmd, rdir / "train.log", False, prefix=prefix)
+    if rc != 0 or not (work / "model" / "model.pt").exists():
+        sys.exit(f"[{prefix}] training failed (exit code {rc}); see {rdir / 'train.log'}")
 
-    train_cmd = [sys.executable, str(MACHAMP_DIR / "train.py"),
-                 "--dataset_configs", str(dataset_path), "--parameters_config", str(params_path),
-                 "--model_dir", str(model_dir), "--device", str(args.device), "--seed", str(SEED)]
-    _run_to_log(train_cmd, rdir / "train.log", False, prefix=prefix)
-    if not (model_dir / "model.pt").exists():
-        sys.exit(f"Training failed, no model.pt in {model_dir} (see {rdir / 'train.log'})")
+    saved = rdir / "model"
+    saved.mkdir(exist_ok=True)
+    for name in MODEL_FILES:
+        if (work / "model" / name).exists():
+            shutil.copy2(work / "model" / name, saved / name)
+    shutil.copy2(dataset_path, rdir / "dataset.json")
+    shutil.copy2(params_path, rdir / "params.json")
+    (saved / "COMPLETE").touch()  # written last: the copy above is complete
 
+
+def predict_and_score(rdir, work, args, prefix):
+    work.mkdir(parents=True, exist_ok=True)
     results = {}
     for tname, tpath in EVAL_TESTS.items():
-        test_in, raw_pred = data_dir / f"test-{tname}.conllu", data_dir / f"pred-{tname}.machamp.conllu"
+        test_in, raw_pred = work / f"test-{tname}.conllu", work / f"pred-{tname}.machamp.conllu"
         strip_multiwords(tpath, test_in)
-        pred_cmd = [sys.executable, str(MACHAMP_DIR / "predict.py"), str(model_dir / "model.pt"),
-                    str(test_in), str(raw_pred), "--device", str(args.device)]
-        _run_to_log(pred_cmd, rdir / f"predict-{tname}.log", False, prefix=prefix)
+        cmd = [sys.executable, str(MACHAMP_DIR / "predict.py"), str(rdir / "model" / "model.pt"),
+               str(test_in), str(raw_pred), "--device", str(args.device)]
+        rc = _run_to_log(cmd, rdir / f"predict-{tname}.log", False, prefix=prefix)
+        if rc != 0:
+            sys.exit(f"[{prefix}] prediction failed on {tname}; see {rdir / f'predict-{tname}.log'}")
         pred = rdir / f"pred-{tname}.conllu"
         restore_multiwords(tpath, raw_pred, pred)
         results[tname] = score(tpath, pred)
         print(f"[{prefix}] test={tname}: " + "  ".join(f"{m} {v:.2f}" for m, v in results[tname].items()))
-    results_path.write_text(json.dumps(results, indent=2))
+    return results
+
+
+def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
+    rdir = run_dir(model, train_set, k, fold, seed)
+    prefix = f"machamp {model} {train_set} | fold {fold + 1}/{k} seed {seed}"
+    if (rdir / "results.json").exists() and not args.force:
+        print(f"[skip] {rdir.name} (done; --force to redo)")
+        return
+    trained = (rdir / "model" / "COMPLETE").exists() and not args.force
+    if args.dry_run:
+        print(f">> [{prefix}] {'predict only' if trained else 'train + predict'} -> {rdir}")
+        return
+
+    if args.force and rdir.exists():
+        shutil.rmtree(rdir)
+    rdir.mkdir(parents=True, exist_ok=True)
+    work = WORK_ROOT / rdir.name
+    if trained:
+        print(f"[{prefix}] model already trained, predicting only")
+    else:
+        train(model, train_file, dev_file, seed, rdir, work, args, prefix)
+    _write_json_atomic(rdir / "results.json", predict_and_score(rdir, work, args, prefix))
+    shutil.rmtree(work, ignore_errors=True)
 
 
 def cmd_setup(args):
@@ -165,39 +209,43 @@ def cmd_setup(args):
     print(f"MaChAmp ready at {MACHAMP_DIR} ({MACHAMP_COMMIT[:10]})")
 
 
+def _splits(train_set, k):
+    """[(fold, train_file, dev_file)] for k-fold CV, or the official dev split when k <= 1."""
+    if k > 1:
+        fold_dir = REPO_ROOT / "cv_folds" / train_set / f"cv{k}"
+        return [(i, tr, dv) for i, (tr, dv) in enumerate(make_folds(TRAIN_SETS[train_set], k, fold_dir))]
+    if train_set not in DEV:
+        sys.exit(f"No dev set for '{train_set}'; use --cv.")
+    return [(0, TRAIN_SETS[train_set], DEV[train_set])]
+
+
 def cmd_run(args):
     if not (MACHAMP_DIR / "train.py").exists():
         sys.exit("MaChAmp not found; run `python src/run_machamp.py setup` first.")
+    k = max(args.cv, 1)
     for model, train_set in itertools.product(args.models, args.train_sets):
-        if args.cv > 1:
-            fold_dir = REPO_ROOT / "cv_folds" / train_set / f"cv{args.cv}"
-            folds = make_folds(TRAIN_SETS[train_set], args.cv, fold_dir)
-            for i, (train_file, dev_file) in enumerate(folds):
-                if args.folds is None or i in args.folds:
-                    run_one(model, train_set, args.cv, i, train_file, dev_file, args)
-        else:
-            if train_set not in DEV:
-                sys.exit(f"No dev set for '{train_set}'; use --cv.")
-            run_one(model, train_set, 1, 0, TRAIN_SETS[train_set], DEV[train_set], args)
+        for fold, train_file, dev_file in _splits(train_set, k):
+            if args.folds is not None and fold not in args.folds:
+                continue
+            for seed in args.seeds:
+                run_one(model, train_set, k, fold, seed, train_file, dev_file, args)
     if not args.dry_run:
         cmd_collect(args)
 
 
 def cmd_collect(args):
-    k = args.cv if args.cv > 1 else 1
+    k = max(args.cv, 1)
     lines = ["model,train_set,test,metric,individual,mean_std"]
     for model, train_set in itertools.product(args.models, args.train_sets):
-        runs = []
-        for i in range(k):
-            p = run_dir(model, train_set, k, i) / "results.json"
-            if p.exists():
-                runs.append(json.loads(p.read_text()))
-        if not runs:
+        runs = [run_dir(model, train_set, k, fold, seed) / "results.json"
+                for fold in range(k) for seed in args.seeds]
+        done = [json.loads(p.read_text()) for p in runs if p.exists()]
+        if not done:
             continue
-        print(f"\n=== machamp | {model} | {train_set} ({len(runs)}/{k} folds) ===")
+        print(f"\n=== machamp | {model} | {train_set} ({len(done)}/{len(runs)} runs done) ===")
         for tname in EVAL_TESTS:
             for m in METRICS:
-                vals = [r[tname][m] for r in runs if tname in r]
+                vals = [r[tname][m] for r in done if tname in r]
                 print(f"  test={tname:4} {m:5} " + " ".join(f"{v:6.2f}" for v in vals) + f"   {_agg(vals)}")
                 lines.append(f"{model},{train_set},{tname},{m}," + "|".join(f"{v:.2f}" for v in vals)
                              + f",{_agg(vals)}")
@@ -216,13 +264,14 @@ def main():
         p.add_argument("--models", nargs="+", default=["berturk"], choices=list(MODELS))
         p.add_argument("--train-sets", nargs="+", default=["ota"], choices=list(TRAIN_SETS))
         p.add_argument("--cv", type=int, default=5, metavar="K", help="k-fold CV (default 5; 0/1 = dev set)")
+        p.add_argument("--seeds", nargs="+", type=int, default=[SEED], help=f"one run per seed (default {SEED})")
 
-    p_run = sub.add_parser("run", help="train + predict + score")
+    p_run = sub.add_parser("run", help="train + predict + score (resumes by default)")
     add_filters(p_run)
     p_run.add_argument("--folds", nargs="+", type=int, default=None, metavar="I")
     p_run.add_argument("--device", type=int, default=0, help="CUDA device; -1 for CPU")
     p_run.add_argument("--epochs", type=int, default=None, help="override num_epochs (e.g. 1 for a test)")
-    p_run.add_argument("--force", action="store_true", help="redo runs that already have results")
+    p_run.add_argument("--force", action="store_true", help="redo runs from scratch")
     p_run.add_argument("--dry-run", action="store_true")
     p_run.set_defaults(func=cmd_run)
 

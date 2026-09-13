@@ -127,7 +127,7 @@ def build_command(task, model, name, train_file, dev_file):
 
 
 def _run_to_log(cmd, log_file, dry_run, prefix=""):
-    """Run a command, streaming output to both console and log file.
+    """Run a command, streaming output to both console and log file; return its exit code.
 
     `prefix` is prepended to every console line (so you can tell which fold/run a line
     belongs to during a sweep). The log file itself stays clean (no prefix).
@@ -135,7 +135,7 @@ def _run_to_log(cmd, log_file, dry_run, prefix=""):
     print(">>", " ".join(cmd))
     print("   log ->", log_file)
     if dry_run:
-        return
+        return 0
     log_file.parent.mkdir(parents=True, exist_ok=True)
     tag = f"[{prefix}] " if prefix else ""
     with open(log_file, "w") as f:
@@ -145,7 +145,7 @@ def _run_to_log(cmd, log_file, dry_run, prefix=""):
             sys.stdout.write(tag + line)
             sys.stdout.flush()
             f.write(line)
-        proc.wait()
+        return proc.wait()
 
 
 # ---- k-fold cross-validation helpers -------------------------------------------------
