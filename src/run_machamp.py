@@ -55,7 +55,12 @@ MODELS = {
     "xlmr":         "xlm-roberta-base",
 }
 
-EVAL_TESTS = {"ota": STEPS_EVAL_TESTS["ota"]}
+# Every trained model is evaluated on all of these (in-domain and cross-dataset).
+EVAL_TESTS = {
+    "ota":  STEPS_EVAL_TESTS["ota"],                              # OTA-BOUN 2026 test
+    "dudu": "data/corpora/ota_dudu/ota_dudu-ud-test.conllu",      # DUDU (UD 2.18) test
+    "tr":   STEPS_EVAL_TESTS["tr"],                               # TR-BOUN test
+}
 METRICS = ["UPOS", "UAS", "LAS"]
 SEED = 8446  # MaChAmp's default seed
 # Files kept from MaChAmp's model dir (model.pt is the best epoch on dev).
@@ -184,10 +189,15 @@ def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     (saved / "COMPLETE").touch()  # written last: the copy above is complete
 
 
-def predict_and_score(rdir, work, args, prefix):
+def predict_and_score(rdir, work, results, args, prefix):
+    """Predict + score every EVAL_TESTS set missing from `results`, saving results.json after
+    each one (so test sets added later only need prediction, never retraining)."""
     work.mkdir(parents=True, exist_ok=True)
-    results = {}
+    if "dev" not in results:
+        results["dev"] = dev_scores(rdir)
     for tname, tpath in EVAL_TESTS.items():
+        if tname in results:
+            continue
         test_in, raw_pred = work / f"test-{tname}.conllu", work / f"pred-{tname}.machamp.conllu"
         strip_multiwords(tpath, test_in)
         cmd = [sys.executable, str(MACHAMP_DIR / "predict.py"), str(rdir / "model" / "model.pt"),
@@ -199,8 +209,7 @@ def predict_and_score(rdir, work, args, prefix):
         restore_multiwords(tpath, raw_pred, pred)
         results[tname] = score(tpath, pred)
         print(f"[{prefix}] test={tname}: " + "  ".join(f"{m} {v:.2f}" for m, v in results[tname].items()))
-    results["dev"] = dev_scores(rdir)
-    return results
+        _write_json_atomic(rdir / "results.json", results)
 
 
 def dev_scores(rdir):
@@ -216,12 +225,16 @@ def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
     rdir = run_dir(model, train_set, k, fold, seed, args.params_name, args.epochs)
     tag = "" if args.params_name == DEFAULT_PARAMS else f" [{args.params_name}]"
     prefix = f"machamp {model}{tag} {train_set} | fold {fold + 1}/{k} seed {seed}"
-    if (rdir / "results.json").exists() and not args.force:
+    results_path = rdir / "results.json"
+    results = json.loads(results_path.read_text()) if results_path.exists() and not args.force else {}
+    missing = [t for t in EVAL_TESTS if t not in results]
+    if not missing:
         print(f"[skip] {rdir.name} (done; --force to redo)")
         return
     trained = (rdir / "model" / "COMPLETE").exists() and not args.force
     if args.dry_run:
-        print(f">> [{prefix}] {'predict only' if trained else 'train + predict'} -> {rdir}")
+        what = f"predict only ({', '.join(missing)})" if trained else "train + predict"
+        print(f">> [{prefix}] {what} -> {rdir}")
         return
 
     if args.force and rdir.exists():
@@ -229,10 +242,10 @@ def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
     rdir.mkdir(parents=True, exist_ok=True)
     work = WORK_ROOT / rdir.name
     if trained:
-        print(f"[{prefix}] model already trained, predicting only")
+        print(f"[{prefix}] model already trained, predicting only: {', '.join(missing)}")
     else:
         train(model, train_file, dev_file, seed, rdir, work, args, prefix)
-    _write_json_atomic(rdir / "results.json", predict_and_score(rdir, work, args, prefix))
+    predict_and_score(rdir, work, results, args, prefix)
     shutil.rmtree(work, ignore_errors=True)
 
 

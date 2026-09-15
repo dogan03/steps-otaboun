@@ -50,6 +50,7 @@ TRAIN_SETS = {
     "tr":     "data/corpora/ota_boun/tr_boun-ud-train.conllu",     # modern Turkish only
     "ota":    "data/corpora/ota_boun/ota_boun-train-2026.conllu",  # historical Turkish (2026, 1600 sents)
     "tr_ota": "data/corpora/ota_boun/best_together.conllu",        # TR + OTA combined
+    "dudu":   "data/corpora/ota_dudu/ota_dudu-ud-train.conllu",    # Ottoman Turkish DUDU (UD 2.18)
 }
 
 # Test sets EVERY trained model is evaluated on (train once -> eval on all of these, in
@@ -63,6 +64,7 @@ EVAL_TESTS = {
 # with --cv (the held-out fold then serves as dev). OTA has no dedicated dev -> use --cv.
 DEV = {
     "tr": "data/corpora/ota_boun/tr_boun-ud-dev.conllu",
+    "dudu": "data/corpora/ota_dudu/ota_dudu-ud-dev.conllu",
 }
 
 # One base config per task. Architecture differs (dep parsing vs sequence tagging),
