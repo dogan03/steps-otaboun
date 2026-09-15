@@ -62,6 +62,12 @@ EVAL_TESTS = {
     "tr":   STEPS_EVAL_TESTS["tr"],                               # TR-BOUN test
 }
 METRICS = ["UPOS", "UAS", "LAS"]
+# MaChAmp tasks a params config can train (its "tasks" key; default: both, jointly).
+TASKS = {
+    "upos":       {"task_type": "seq", "column_idx": 3},
+    "dependency": {"task_type": "dependency", "column_idx": 6},
+}
+TASK_METRICS = {"upos": ["UPOS"], "dependency": ["UAS", "LAS"]}
 SEED = 8446  # MaChAmp's default seed
 # Files kept from MaChAmp's model dir (model.pt is the best epoch on dev).
 MODEL_FILES = ["model.pt", "log.txt", "metrics.json", "params-config.json", "dataset-configs.json",
@@ -98,9 +104,11 @@ def strip_multiwords(src, dst):
                 out.write(line)
 
 
-def restore_multiwords(gold_path, machamp_pred, out_path):
-    """Write the gold file with MaChAmp's UPOS/HEAD/DEPREL filled in (other annotation columns
-    blanked), so the prediction keeps the gold multiword lines and scores with conll18_ud_eval."""
+def restore_multiwords(gold_path, machamp_pred, out_path, tasks):
+    """Write the gold file with MaChAmp's predicted columns filled in (other annotation columns
+    blanked), so the prediction keeps the gold multiword lines and scores with conll18_ud_eval.
+    A model without the dependency task keeps the gold HEAD/DEPREL (the scorer needs a tree);
+    only the metrics of the trained tasks are reported."""
     with open(machamp_pred, encoding="utf-8") as f:
         pred = iter([l.rstrip("\n").split("\t") for l in f if _is_word(l)])
     with open(gold_path, encoding="utf-8") as f, open(out_path, "w", encoding="utf-8") as out:
@@ -109,10 +117,17 @@ def restore_multiwords(gold_path, machamp_pred, out_path):
                 cols, p = line.rstrip("\n").split("\t"), next(pred)
                 assert cols[1] == p[1], f"word mismatch: gold {cols[1]!r} vs pred {p[1]!r}"
                 cols[2] = cols[4] = cols[5] = "_"                    # LEMMA, XPOS, FEATS: not predicted
-                cols[3], cols[6], cols[7] = p[3], p[6], p[7]         # UPOS, HEAD, DEPREL
+                cols[3] = p[3] if "upos" in tasks else "_"
+                if "dependency" in tasks:
+                    cols[6], cols[7] = p[6], p[7]                    # HEAD, DEPREL
                 line = "\t".join(cols) + "\n"
             out.write(line)
     assert next(pred, None) is None, "prediction has more words than gold"
+
+
+def config_tasks(name):
+    """Tasks trained by a params config: its "tasks" list (our key, not MaChAmp's), default both."""
+    return json.loads((PARAMS_DIR / f"{name}.json").read_text()).get("tasks", list(TASKS))
 
 
 def load_params(name, model, epochs):
@@ -120,6 +135,7 @@ def load_params(name, model, epochs):
     expands to every hidden layer of that encoder (embeddings + all transformer layers,
     combined with a learned scalar mix, like STEPS)."""
     params = json.loads((PARAMS_DIR / f"{name}.json").read_text())
+    params.pop("tasks", None)
     params["transformer_model"] = MODELS[model]
     if epochs:
         params["training"]["num_epochs"] = epochs
@@ -138,10 +154,7 @@ def write_configs(cfg_dir, model, train_file, dev_file, args):
             "train_data_path": str(Path(train_file).resolve()),
             "dev_data_path": str(Path(dev_file).resolve()),
             "word_idx": 1,
-            "tasks": {
-                "upos": {"task_type": "seq", "column_idx": 3},
-                "dependency": {"task_type": "dependency", "column_idx": 6},
-            },
+            "tasks": {t: TASKS[t] for t in config_tasks(args.params_name)},
         }
     }
     params = load_params(args.params_name, model, args.epochs)
@@ -157,9 +170,10 @@ def _write_json_atomic(path, obj):
     os.replace(tmp, path)
 
 
-def score(gold_path, pred_path):
+def score(gold_path, pred_path, tasks):
     ev = evaluate(load_conllu_file(str(gold_path)), load_conllu_file(str(pred_path)))
-    return {m: round(100 * ev[m].f1, 2) for m in METRICS}
+    metrics = [m for t in tasks for m in TASK_METRICS[t]]
+    return {m: round(100 * ev[m].f1, 2) for m in METRICS if m in metrics}
 
 
 def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
@@ -206,8 +220,9 @@ def predict_and_score(rdir, work, results, args, prefix):
         if rc != 0:
             sys.exit(f"[{prefix}] prediction failed on {tname}; see {rdir / f'predict-{tname}.log'}")
         pred = rdir / f"pred-{tname}.conllu"
-        restore_multiwords(tpath, raw_pred, pred)
-        results[tname] = score(tpath, pred)
+        tasks = config_tasks(args.params_name)
+        restore_multiwords(tpath, raw_pred, pred, tasks)
+        results[tname] = score(tpath, pred, tasks)
         print(f"[{prefix}] test={tname}: " + "  ".join(f"{m} {v:.2f}" for m, v in results[tname].items()))
         _write_json_atomic(rdir / "results.json", results)
 
@@ -216,9 +231,10 @@ def dev_scores(rdir):
     """Best-epoch dev scores from MaChAmp's metrics.json, for choosing hyperparameters without
     looking at the test set. (MaChAmp's LAS counts deprel subtypes, unlike conll18.)"""
     m = json.loads((rdir / "model" / "metrics.json").read_text())
-    return {"LAS": round(100 * m["best_dev_dependency_las"], 2),
-            "UPOS": round(100 * m["best_dev_upos_accuracy"], 2),
-            "best_epoch": m["best_epoch"]}
+    dev = {name: round(100 * m[key], 2) for name, key in
+           [("LAS", "best_dev_dependency_las"), ("UPOS", "best_dev_upos_accuracy")] if key in m}
+    dev["best_epoch"] = m["best_epoch"]
+    return dev
 
 
 def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
