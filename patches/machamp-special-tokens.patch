@@ -1,3 +1,19 @@
+diff --git a/machamp/model/encoder.py b/machamp/model/encoder.py
+index 0b1e8c0..ee4e26e 100644
+--- a/machamp/model/encoder.py
++++ b/machamp/model/encoder.py
+@@ -145,6 +145,11 @@ class MachampEncoder:
+         all_layers = None
+         if hasattr(output, 'hidden_states'):
+             all_layers = output.hidden_states
++            # [steps-otaboun] ModernBERT (TabiBERT, mmBERT) appends the state from *before* its
++            # final LayerNorm to hidden_states; the normalized output is only in
++            # last_hidden_state. For BERT/RoBERTa/XLM-R the two are identical, so this is a no-op.
++            if getattr(output, 'last_hidden_state', None) is not None and len(all_layers) > 0:
++                all_layers = tuple(all_layers[:-1]) + (output.last_hidden_state,)
+         # elif hasattr(output, 'decoder_hidden_states'):
+         #    all_layers = output.encoder_hidden_states
+         elif hasattr(output, 'encoder_hidden_states'):
 diff --git a/machamp/model/machamp.py b/machamp/model/machamp.py
 index 7335fce..c913d34 100644
 --- a/machamp/model/machamp.py
