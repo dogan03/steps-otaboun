@@ -1,0 +1,122 @@
+diff --git a/machamp/model/machamp.py b/machamp/model/machamp.py
+index 7335fce..c913d34 100644
+--- a/machamp/model/machamp.py
++++ b/machamp/model/machamp.py
+@@ -120,10 +120,9 @@ class MachampModel(torch.nn.Module):
+         else:
+             self.dropout = torch.nn.Dropout(dropout)
+ 
+-        tokenizer_out = tokenizer.prepare_for_model([])['input_ids']
+-        # we assume that if there is only one special token that it is the end token
+-        self.end_token = None if len(tokenizer_out) == 0 else tokenizer_out[-1]
+-        self.start_token = None if len(tokenizer_out) <= 1 else tokenizer_out[0]
++        # [steps-otaboun] prepare_for_model([]) misses the special tokens of some fast
++        # tokenizers (ModernBERT), so ask the tokenizer what it really adds.
++        self.start_token, self.end_token = myutils.get_special_token_ids(tokenizer)
+         self.num_special_tokens = 2 - [self.end_token, self.start_token].count(None)
+         self.encoder = MachampEncoder(self.mlm, max_input_length, self.end_token, self.start_token)
+ 
+diff --git a/machamp/readers/read_sequence.py b/machamp/readers/read_sequence.py
+index 2ab9740..2e29aac 100644
+--- a/machamp/readers/read_sequence.py
++++ b/machamp/readers/read_sequence.py
+@@ -110,15 +110,18 @@ def tokenize_simple(tokenizer: AutoTokenizer, sent: List[List[str]], word_col_id
+     """
+     token_ids = []
+     offsets = []
++    # [steps-otaboun] byte-level BPE tokenizers (ModernBERT) need the leading space of a word
++    prefix = ' ' if myutils.needs_prefix_space(tokenizer) else ''
+     for token_idx in range(len(sent)):
++        word = prefix + sent[token_idx][word_col_idx]
+         # we do not use return_tensors='pt' because we do not know the length beforehand
+         if num_special_tokens == 2:
+-            tokked = tokenizer.encode(sent[token_idx][word_col_idx])[1:-1]
++            tokked = tokenizer.encode(word)[1:-1]
+         elif num_special_tokens == 1:
+             # We assume that if there is only one special token, it is the end token
+-            tokked = tokenizer.encode(sent[token_idx][word_col_idx])[:-1]
++            tokked = tokenizer.encode(word)[:-1]
+         elif num_special_tokens == 0:
+-            tokked = tokenizer.encode(sent[token_idx][word_col_idx])
++            tokked = tokenizer.encode(word)
+         else:
+             logger.error('Number of special tokens is currently not handled: ' + str(num_special_tokens))
+             exit(1)
+@@ -182,7 +185,8 @@ def read_sequence(
+     subword_counter = 0
+     has_unk = tokenizer.unk_token_id != None
+     has_tok_task = 'tok' in [config['tasks'][task]['task_type'] for task in config['tasks']]
+-    num_special_tokens = len(tokenizer.prepare_for_model([])['input_ids'])
++    # [steps-otaboun] reliable special-token detection (see myutils.get_special_token_ids)
++    num_special_tokens = 2 - list(myutils.get_special_token_ids(tokenizer)).count(None)
+     if has_tok_task:
+         pre_tokenizer = BasicTokenizer(strip_accents=False, do_lower_case=False, tokenize_chinese_chars=True)
+         tokenizer.do_basic_tokenize = False
+@@ -234,7 +238,7 @@ def read_sequence(
+         else:
+             token_ids, offsets = tokenize_simple(tokenizer, sent, word_col_idx, num_special_tokens, has_unk)
+             no_unk_subwords = None
+-        token_ids = tokenizer.prepare_for_model(token_ids, return_tensors='pt')['input_ids']
++        token_ids = myutils.add_special_tokens(tokenizer, token_ids)
+ 
+         dataset_ids_subwords = []
+         if 'dataset_embed_idx' in config:
+@@ -382,7 +386,7 @@ def read_sequence(
+             # No mapping can be found, but we still want to train for the other tasks, so backoff to the gold
+             # tokenization
+             token_ids, offsets = tokenize_simple(tokenizer, sent, word_col_idx, num_special_tokens, has_unk)
+-            token_ids = tokenizer.prepare_for_model(token_ids, return_tensors='pt')['input_ids']
++            token_ids = myutils.add_special_tokens(tokenizer, token_ids)
+             no_unk_subwords = tokenizer.convert_ids_to_tokens(token_ids)
+             if type(tokenizer) == BertTokenizer:
+                 no_unk_subwords = [subword[:2] if subword.startswith('##') else subword for subword in no_unk_subwords]
+diff --git a/machamp/utils/myutils.py b/machamp/utils/myutils.py
+index ee4b807..f9a8820 100644
+--- a/machamp/utils/myutils.py
++++ b/machamp/utils/myutils.py
+@@ -494,3 +494,45 @@ class StreamToLogger2(object):
+    def flush(self):
+         pass
+ 
++
++def get_special_token_ids(tokenizer):
++    """[steps-otaboun] (start_id, end_id) that this tokenizer actually adds, or None each.
++
++    `prepare_for_model([])` (used before) reports 0 special tokens for some fast tokenizers
++    (e.g. ModernBERT-based ones like TabiBERT/mmBERT), while encode() does add [CLS]/[SEP].
++    That made MaChAmp keep a [CLS]/[SEP] pair inside every single word.
++    """
++    with_special = tokenizer.encode('a')
++    without_special = tokenizer.encode('a', add_special_tokens=False)
++    num_extra = len(with_special) - len(without_special)
++    if num_extra <= 0:
++        return None, None
++    if num_extra == 1:  # assume it is the end token
++        return None, with_special[-1]
++    return with_special[0], with_special[-1]
++
++
++def add_special_tokens(tokenizer, token_ids):
++    """[steps-otaboun] Wrap token ids in the tokenizer's special tokens (tensor out).
++
++    Replaces `prepare_for_model`, which is a no-op for the fast tokenizers described above.
++    """
++    start, end = get_special_token_ids(tokenizer)
++    ids = ([start] if start is not None else []) + list(token_ids) + ([end] if end is not None else [])
++    return torch.tensor(ids, dtype=torch.long)
++
++
++_PREFIX_SPACE_CACHE = {}
++
++
++def needs_prefix_space(tokenizer):
++    """[steps-otaboun] True for byte-level BPE tokenizers (GPT-2 style, 'Ġ'), e.g. ModernBERT.
++
++    Those encode a word differently depending on whether it is preceded by a space, and during
++    pre-training nearly every word is. Tokenizing words one by one without the space gives
++    subwords the model has hardly seen, which destroys accuracy.
++    """
++    key = id(tokenizer)
++    if key not in _PREFIX_SPACE_CACHE:
++        _PREFIX_SPACE_CACHE[key] = identify_tokenizer(tokenizer) == 'G'
++    return _PREFIX_SPACE_CACHE[key]

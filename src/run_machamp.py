@@ -39,8 +39,11 @@ from util.conll18_ud_eval import evaluate, load_conllu_file
 MACHAMP_REPO = "https://github.com/machamp-nlp/machamp.git"
 MACHAMP_COMMIT = "4048c34b37796aa496624b68b3530183dc61a690"  # master, 2026-06-03
 MACHAMP_DIR = REPO_ROOT / "third_party" / "machamp"
-# Applied on top of MACHAMP_COMMIT: early stopping ("patience"/"min_epochs" in params.training).
-PATCHES = [REPO_ROOT / "patches" / "machamp-early-stopping.patch"]
+# Applied on top of MACHAMP_COMMIT:
+#  - early stopping ("patience"/"min_epochs" in params.training)
+#  - special-token detection that also works for ModernBERT tokenizers (TabiBERT, mmBERT)
+PATCHES = [REPO_ROOT / "patches" / "machamp-early-stopping.patch",
+           REPO_ROOT / "patches" / "machamp-special-tokens.patch"]
 # Hyperparameter configs: configs/machamp/<name>.json, chosen with --params (default "params").
 PARAMS_DIR = REPO_ROOT / "configs" / "machamp"
 DEFAULT_PARAMS = "params"
@@ -53,6 +56,9 @@ MODELS = {
     "berturk":      "dbmdz/bert-base-turkish-cased",
     "multilingual": "bert-base-multilingual-cased",
     "xlmr":         "xlm-roberta-base",
+    "xlmr_large":   "FacebookAI/xlm-roberta-large",
+    "tabibert":     "boun-tabilab/TabiBERT",      # Turkish ModernBERT (BOUN TabiLab, 2025)
+    "mmbert":       "jhu-clsp/mmBERT-base",       # multilingual ModernBERT (2025)
 }
 
 # Every trained model is evaluated on all of these (in-domain and cross-dataset).
@@ -270,11 +276,12 @@ def ensure_machamp():
     if not MACHAMP_DIR.exists():
         subprocess.run(["git", "clone", "-q", MACHAMP_REPO, str(MACHAMP_DIR)], check=True)
     git = ["git", "-C", str(MACHAMP_DIR)]
-    for patch in PATCHES:
-        applied = subprocess.run(git + ["apply", "--reverse", "--check", str(patch)],
-                                 capture_output=True).returncode == 0
-        if not applied:
-            subprocess.run(git + ["checkout", "-q", "-f", MACHAMP_COMMIT], check=True)
+    missing = [p for p in PATCHES
+               if subprocess.run(git + ["apply", "--reverse", "--check", str(p)],
+                                 capture_output=True).returncode != 0]
+    if missing:  # reset once, then (re-)apply all patches, so they can't undo each other
+        subprocess.run(git + ["checkout", "-q", "-f", MACHAMP_COMMIT], check=True)
+        for patch in PATCHES:
             subprocess.run(git + ["apply", str(patch)], check=True)
 
 
