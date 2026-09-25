@@ -20,7 +20,14 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-uv venv -p 3.8 "$ENV_DIR"
+# On Apple Silicon there is no arm64 build of torch 1.4, but the x86_64 one runs under
+# Rosetta, which is enough to test the pipeline locally (training itself belongs on a GPU).
+PYTHON=3.8
+if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  uv python install cpython-3.8.20-macos-x86_64
+  PYTHON=cpython-3.8.20-macos-x86_64
+fi
+uv venv -p "$PYTHON" "$ENV_DIR"
 export VIRTUAL_ENV="$ENV_DIR"
 
 uv pip install "torch==1.4.0"
@@ -30,6 +37,7 @@ uv pip install \
   "spacy==2.3.9" "numpy<1.24" "overrides<4" "jsonnet>=0.10" "nltk" "boto3" "requests" "tqdm" \
   "editdistance" "h5py" "scikit-learn" "scipy" "pytz" "unidecode" "tensorboardX" "ftfy" \
   "jsonpickle" "parsimonious" "sqlparse" "word2number" "flask" "flask-cors" "gevent" \
+  "numpydoc" "pytest" "flaky" "responses" "matplotlib" \
   "pytorch-pretrained-bert>=0.6.2" "pytorch-transformers==1.1.0" "conllu<3"
 
 echo
