@@ -1,5 +1,5 @@
 diff --git a/wembeddings/wembeddings.py b/wembeddings/wembeddings.py
-index 16f3ea2..c488a34 100644
+index 16f3ea2..7841f89 100644
 --- a/wembeddings/wembeddings.py
 +++ b/wembeddings/wembeddings.py
 @@ -26,6 +26,13 @@ class WEmbeddings:
@@ -16,7 +16,7 @@ index 16f3ea2..c488a34 100644
      }
  
      MAX_SUBWORDS_PER_SENTENCE = 510
-@@ -49,10 +56,14 @@ class WEmbeddings:
+@@ -49,10 +56,22 @@ class WEmbeddings:
  
                  self.tokenizer = transformers.AutoTokenizer.from_pretrained(self._transformers_model_name, use_fast=True)
  
@@ -24,14 +24,22 @@ index 16f3ea2..c488a34 100644
 -                    self._transformers_model_name,
 -                    config=transformers.AutoConfig.from_pretrained(self._transformers_model_name, output_hidden_states=True),
 -                )
-+                # [steps-otaboun] many models ship PyTorch weights only, so fall back to from_pt
++                # [steps-otaboun] Most models ship PyTorch weights only. Recent transformers
++                # versions crash when converting safetensors directly to TF, so in that case
++                # load the model with PyTorch once and re-save it in the old .bin format.
 +                config = transformers.AutoConfig.from_pretrained(self._transformers_model_name, output_hidden_states=True)
 +                try:
 +                    self._transformers_model = transformers.TFAutoModel.from_pretrained(
 +                        self._transformers_model_name, config=config)
-+                except (OSError, EnvironmentError):
++                except Exception:
++                    import os, tempfile
++                    converted = os.path.join(tempfile.gettempdir(),
++                                             "pt2tf_" + self._transformers_model_name.replace("/", "_"))
++                    if not os.path.exists(os.path.join(converted, "pytorch_model.bin")):
++                        torch_model = transformers.AutoModel.from_pretrained(self._transformers_model_name)
++                        torch_model.save_pretrained(converted, safe_serialization=False)
 +                    self._transformers_model = transformers.TFAutoModel.from_pretrained(
-+                        self._transformers_model_name, config=config, from_pt=True)
++                        converted, config=config, from_pt=True)
  
                  def compute_embeddings(subwords, segments):
                      subword_embeddings_layers = self._transformers_model(
