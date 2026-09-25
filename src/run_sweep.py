@@ -56,8 +56,9 @@ TRAIN_SETS = {
 # Test sets EVERY trained model is evaluated on (train once -> eval on all of these, in
 # the same run; no retraining per test set).
 EVAL_TESTS = {
-    "ota": "data/corpora/ota_boun/ota_boun-test-2026.conllu",  # historical Turkish
-    "tr":  "data/corpora/ota_boun/tr_boun-ud-test.conllu",     # modern Turkish
+    "ota":  "data/corpora/ota_boun/ota_boun-test-2026.conllu",     # historical Turkish
+    "dudu": "data/corpora/ota_dudu/ota_dudu-ud-test.conllu",       # historical Turkish (DUDU)
+    "tr":   "data/corpora/ota_boun/tr_boun-ud-test.conllu",        # modern Turkish
 }
 
 # Dev (early-stopping) set for NON-CV train sets. A train set NOT listed here must be run
@@ -128,7 +129,7 @@ def build_command(task, model, name, train_file, dev_file):
     ]
 
 
-def _run_to_log(cmd, log_file, dry_run, prefix=""):
+def _run_to_log(cmd, log_file, dry_run, prefix="", cwd=None):
     """Run a command, streaming output to both console and log file; return its exit code.
 
     `prefix` is prepended to every console line (so you can tell which fold/run a line
@@ -142,7 +143,7 @@ def _run_to_log(cmd, log_file, dry_run, prefix=""):
     tag = f"[{prefix}] " if prefix else ""
     with open(log_file, "w") as f:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                cwd=REPO_ROOT, text=True, bufsize=1)
+                                cwd=cwd or REPO_ROOT, text=True, bufsize=1)
         for line in proc.stdout:
             sys.stdout.write(tag + line)
             sys.stdout.flush()

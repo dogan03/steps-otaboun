@@ -1,0 +1,37 @@
+diff --git a/wembeddings/wembeddings.py b/wembeddings/wembeddings.py
+index 16f3ea2..c488a34 100644
+--- a/wembeddings/wembeddings.py
++++ b/wembeddings/wembeddings.py
+@@ -26,6 +26,13 @@ class WEmbeddings:
+         "bert-base-multilingual-uncased-last4": ("bert-base-multilingual-uncased", -4, None),
+         "robeczech-base-last4": ("ufal/robeczech-base", -4, None),
+         "xlm-roberta-base-last4": ("xlm-roberta-base", -4, None),
++        # [steps-otaboun] encoders used in the historical Turkish benchmark
++        "berturk-last4": ("dbmdz/bert-base-turkish-cased", -4, None),
++        "bert-base-multilingual-cased-last4": ("bert-base-multilingual-cased", -4, None),
++        "xlm-roberta-large-last4": ("FacebookAI/xlm-roberta-large", -4, None),
++        "tabibert-last4": ("boun-tabilab/TabiBERT", -4, None),
++        "mmbert-last4": ("jhu-clsp/mmBERT-base", -4, None),
++        "bert-tiny-last4": ("prajjwal1/bert-tiny", -4, None),  # only for quick tests
+     }
+ 
+     MAX_SUBWORDS_PER_SENTENCE = 510
+@@ -49,10 +56,14 @@ class WEmbeddings:
+ 
+                 self.tokenizer = transformers.AutoTokenizer.from_pretrained(self._transformers_model_name, use_fast=True)
+ 
+-                self._transformers_model = transformers.TFAutoModel.from_pretrained(
+-                    self._transformers_model_name,
+-                    config=transformers.AutoConfig.from_pretrained(self._transformers_model_name, output_hidden_states=True),
+-                )
++                # [steps-otaboun] many models ship PyTorch weights only, so fall back to from_pt
++                config = transformers.AutoConfig.from_pretrained(self._transformers_model_name, output_hidden_states=True)
++                try:
++                    self._transformers_model = transformers.TFAutoModel.from_pretrained(
++                        self._transformers_model_name, config=config)
++                except (OSError, EnvironmentError):
++                    self._transformers_model = transformers.TFAutoModel.from_pretrained(
++                        self._transformers_model_name, config=config, from_pt=True)
+ 
+                 def compute_embeddings(subwords, segments):
+                     subword_embeddings_layers = self._transformers_model(

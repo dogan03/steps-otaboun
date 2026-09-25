@@ -1,0 +1,90 @@
+diff --git a/udpipe2.py b/udpipe2.py
+index a9bc9a8..a3f68c8 100644
+--- a/udpipe2.py
++++ b/udpipe2.py
+@@ -26,11 +26,14 @@ import udpipe2_eval
+ __version__ = "2.1.1-dev"
+ 
+ 
+-# Use tf.compat.v1 if running with TF2. Only prediction is supported
+-# in this case, because we use tf.compat.opt.LazyAdamOptimizer, which
+-# is not available in TF2.
++# Use tf.compat.v1 if running with TF2. [steps-otaboun] Training works under TF2 as well:
++# tf.contrib.opt.LazyAdamOptimizer is replaced by the standard Adam optimizer, and the
++# tf.contrib.summary (TensorBoard) calls are disabled, as tf.contrib does not exist in TF2.
+ if not tf.__version__.startswith("1"):
+     tf = tf.compat.v1
++    # [steps-otaboun] TF1-style graphs/savers need eager off and classic (ref) variables
++    tf.disable_eager_execution()
++    tf.disable_resource_variables()
+ 
+ # Disable TF warnings
+ tf.logging.set_verbosity(tf.logging.ERROR)
+@@ -238,54 +241,31 @@ class UDPipe2:
+ 
+             # Training
+             self.global_step = tf.train.create_global_step()
++            # [steps-otaboun] LazyAdam (tf.contrib) only differs from Adam in that it updates
++            # just the embedding rows seen in a batch; plain Adam is the TF2 equivalent.
++            optimizer_class = getattr(getattr(tf, "contrib", None), "opt", None)
++            optimizer_class = optimizer_class.LazyAdamOptimizer if optimizer_class else tf.train.AdamOptimizer
+             if args.clip_gradient:
+-                optimizer = tf.contrib.opt.LazyAdamOptimizer(learning_rate=self.learning_rate, beta2=args.beta_2)
++                optimizer = optimizer_class(learning_rate=self.learning_rate, beta2=args.beta_2)
+                 gradients, variables = zip(*optimizer.compute_gradients(loss))
+                 gradients, gradient_norm = tf.clip_by_global_norm(gradients, args.clip_gradient)
+                 self.training = optimizer.apply_gradients(zip(gradients, variables), global_step=self.global_step)
+             else:
+-                self.training = tf.contrib.opt.LazyAdamOptimizer(learning_rate=self.learning_rate, beta2=args.beta_2).minimize(loss, global_step=self.global_step)
++                self.training = optimizer_class(learning_rate=self.learning_rate, beta2=args.beta_2).minimize(loss, global_step=self.global_step)
+ 
+             # Summaries
+-            summary_writer = tf.contrib.summary.create_file_writer(args.model, flush_millis=10 * 1000)
+-            with summary_writer.as_default(), tf.contrib.summary.record_summaries_every_n_global_steps(100):
+-                self.training_summaries = [
+-                    tf.contrib.summary.scalar("train/loss", loss),
+-                    tf.contrib.summary.scalar("train/lr", self.learning_rate)]
+-                if args.clip_gradient:
+-                    self.training_summaries.append(tf.contrib.summary.scalar("train/gradient_norm", gradient_norm))
+-                for tag in args.tags:
+-                    self.training_summaries.append(tf.contrib.summary.scalar(
+-                        "train/{}".format(tag),
+-                        tf.reduce_sum(tf.cast(tf.equal(self.tags[tag], self.predictions[tag]), tf.float32) * weights) /
+-                        weights_sum))
+-                if args.parse:
+-                    heads_acc = tf.reduce_sum(tf.cast(tf.equal(self.heads, tf.argmax(heads, axis=-1, output_type=tf.int32)),
+-                                                      tf.float32) * weights) / weights_sum
+-                    self.training_summaries.extend([tf.contrib.summary.scalar("train/heads_acc", heads_acc)])
+-                    deprels_acc = tf.reduce_sum(tf.cast(tf.equal(self.deprels, tf.argmax(deprels, axis=-1, output_type=tf.int32)),
+-                                                        tf.float32) * weights) / weights_sum
+-                    self.training_summaries.extend([tf.contrib.summary.scalar("train/deprels_acc", deprels_acc)])
+-
+-            # Evaluation summaries
+-            self.summary_writers = {"": summary_writer}
++            # [steps-otaboun] tf.contrib.summary is gone in TF2; training does not need
++            # TensorBoard output, so the summary ops become no-ops.
++            self.training_summaries = []
++            self.summary_writers = {"": None}
+             for dataset in devs + tests:
+-                if dataset.label not in self.summary_writers:
+-                    self.summary_writers[dataset.label] = tf.contrib.summary.create_file_writer(
+-                        os.path.join(args.model, dataset.label), flush_millis=10 * 1000)
+-
++                self.summary_writers.setdefault(dataset.label, None)
+             self.event = tf.placeholder(tf.string, [])
+-            self.event_summaries = {}
+-            for name, writer in self.summary_writers.items():
+-                with writer.as_default():
+-                    self.event_summaries[name] = tf.contrib.summary.import_event(self.event)
+-            self.summary_writers_close = [writer.close() for writer in self.summary_writers.values()]
++            self.event_summaries = {name: tf.no_op() for name in self.summary_writers}
++            self.summary_writers_close = []
+ 
+             # Initialize variables
+             self.session.run(tf.global_variables_initializer())
+-            for summary_writer in self.summary_writers.values():
+-                with summary_writer.as_default():
+-                    tf.contrib.summary.initialize(session=self.session)
+ 
+     def load(self, path, morphodita_dictionary=None):
+         # We use the following version instead of calling `self.saver.restore`,

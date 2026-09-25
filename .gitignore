@@ -8,3 +8,8 @@ cv_folds/
 predictions/
 third_party/
 machamp_work/
+udpipe2_work/
+udpipe2_embeddings/
+udify_work/
+udify_bert/
+.venv-udify/
