@@ -40,6 +40,18 @@ uv pip install \
   "numpydoc" "pytest" "flaky" "responses" "matplotlib" \
   "pytorch-pretrained-bert>=0.6.2" "pytorch-transformers==1.1.0" "conllu<3"
 
+# Fail loudly if anything above did not land in the environment.
+"$ENV_DIR/bin/python" - <<'CHECK'
+import importlib, sys
+missing = [m for m in ["torch", "allennlp", "spacy", "_jsonnet", "overrides",
+                       "pytorch_pretrained_bert", "conllu", "numpydoc"]
+           if not importlib.util.find_spec(m)]
+if missing:
+    sys.exit("UDify environment is incomplete, missing: " + ", ".join(missing))
+import torch
+print("torch", torch.__version__, "| allennlp ok")
+CHECK
+
 echo
 echo "UDify environment ready: $ENV_DIR"
 echo "Next:"
