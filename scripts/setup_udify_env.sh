@@ -28,12 +28,14 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
   PYTHON=cpython-3.8.20-macos-x86_64
 fi
 uv venv --clear -p "$PYTHON" "$ENV_DIR"   # --clear: never prompt when the dir exists
-export VIRTUAL_ENV="$ENV_DIR"
+# Always install into this environment explicitly; relying on VIRTUAL_ENV is not enough,
+# uv otherwise falls back to the system interpreter (e.g. Python 3.13 on Colab).
+PIP="uv pip install --python $ENV_DIR/bin/python"
 
-uv pip install "torch==1.4.0"
-uv pip install "allennlp==0.9.0" --no-deps
+$PIP "torch==1.4.0"
+$PIP "allennlp==0.9.0" --no-deps
 # allennlp 0.9's runtime dependencies (hand-picked so that modern wheels can be used)
-uv pip install \
+$PIP \
   "spacy==2.3.9" "numpy<1.24" "overrides<4" "jsonnet>=0.10" "nltk" "boto3" "requests" "tqdm" \
   "editdistance" "h5py" "scikit-learn" "scipy" "pytz" "unidecode" "tensorboardX" "ftfy" \
   "jsonpickle" "parsimonious" "sqlparse" "word2number" "flask" "flask-cors" "gevent" \
