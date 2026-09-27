@@ -104,15 +104,6 @@ def stage(corpus_path, model, work, name, args, prefix):
     return staged
 
 
-def size_based_args(train_file):
-    """UDPipe 2's own per-treebank settings (scripts/train.sh): the batch size and the RNN
-    dimension depend on how many words the training file has."""
-    words = sum(1 for line in open(train_file, encoding="utf-8")
-                if line[:1].isdigit() and line.split("\t", 1)[0].isdigit())
-    return {"batch_size": 64 if words >= 400_000 else 32,
-            "rnn_cell_dim": 512 if words >= 50_000 else 384}, words
-
-
 def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     if work.exists():
         shutil.rmtree(work)
@@ -120,15 +111,10 @@ def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     staged_train = stage(train_file, model, work, "train", args, prefix)
     staged_dev = stage(dev_file, model, work, "dev", args, prefix)
 
-    sized, words = size_based_args(train_file)
-    print(f"[{prefix}] {words} training words -> batch_size {sized['batch_size']}, "
-          f"rnn_cell_dim {sized['rnn_cell_dim']} (UDPipe 2's own rule)")
     cmd = [sys.executable, str(UDPIPE_DIR / "udpipe2.py"), str(work / "model"),
            "--train", str(staged_train), "--dev", str(staged_dev),
            "--seed", str(seed), "--threads", str(args.threads),
-           "--wembedding_model", MODELS[model],
-           "--batch_size", str(sized["batch_size"]),
-           "--rnn_cell_dim", str(sized["rnn_cell_dim"])]
+           "--wembedding_model", MODELS[model]]
     if args.epochs:
         cmd += ["--epochs", args.epochs]
     rc = _run_to_log(cmd, rdir / "train.log", False, prefix=prefix)
