@@ -85,7 +85,7 @@ def embeddings_for(corpus_path, model, args, prefix):
     cache = EMB_CACHE / model / f"{corpus_path.stem}.npz"
     if not cache.exists():
         cache.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cache.with_suffix(".tmp.npz")
+        tmp = cache.with_suffix(f".tmp{os.getpid()}.npz")  # unique: runs may go in parallel
         cmd = [sys.executable, str(WEMB_DIR / "compute_wembeddings.py"), str(corpus_path.resolve()), str(tmp),
                "--model", MODELS[model], "--batch_size", str(args.emb_batch_size)]
         rc = _run_to_log(cmd, cache.with_suffix(".log"), False, prefix=f"{prefix} embeddings")

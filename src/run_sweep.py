@@ -169,10 +169,13 @@ def _read_sentences(conllu_path):
 
 
 def _write_sentences(blocks, path):
-    with open(path, "w") as f:
+    # Written atomically: several runs may (re)create the same fold files in parallel.
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w") as f:
         for block in blocks:
             f.writelines(block)
             f.write("\n")  # blank line separates sentences
+    os.replace(tmp, path)
 
 
 def make_folds(train_file, k, out_dir):
