@@ -27,7 +27,7 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
   uv python install cpython-3.8.20-macos-x86_64
   PYTHON=cpython-3.8.20-macos-x86_64
 fi
-uv venv -p "$PYTHON" "$ENV_DIR"
+uv venv --clear -p "$PYTHON" "$ENV_DIR"   # --clear: never prompt when the dir exists
 export VIRTUAL_ENV="$ENV_DIR"
 
 uv pip install "torch==1.4.0"
