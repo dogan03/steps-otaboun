@@ -2,9 +2,9 @@
 # Creates the environment UDify needs (Python 3.8, torch 1.4, allennlp 0.9).
 #
 # Notes on the pins:
-#  - torch 1.4 / allennlp 0.9 are what UDify pins; they exist as Linux wheels only, and
-#    torch 1.4 is a CUDA 10.1 build, so the GPU must be compute capability <= 7.5
-#    (on Colab: a T4, not an A100).
+#  - allennlp 0.9 is what UDify pins. Its torch 1.4 pin is a CUDA 10.1 build that cannot run
+#    on Ampere GPUs, so we install torch 1.7.1 (CUDA 11) instead: same allennlp API, and it
+#    works on both a T4 and an A100.
 #  - allennlp 0.9 asks for spacy <2.2, which has no Python 3.8 wheel, so we install allennlp
 #    without its dependency resolution and pin spacy 2.3 (same API for what allennlp uses).
 #  - `overrides` must stay <4: allennlp 0.9 uses the old decorator behaviour.
@@ -32,7 +32,13 @@ uv venv --clear -p "$PYTHON" "$ENV_DIR"   # --clear: never prompt when the dir e
 # uv otherwise falls back to the system interpreter (e.g. Python 3.13 on Colab).
 PIP="uv pip install --python $ENV_DIR/bin/python"
 
-$PIP "torch==1.4.0"
+# UDify pins torch 1.4, but that is a CUDA 10.1 build and does not run on Ampere GPUs.
+# torch 1.7.1 keeps allennlp 0.9 working and its CUDA 11 build covers T4 and A100 alike.
+if [ "$(uname -s)" = "Linux" ]; then
+  $PIP "torch==1.7.1+cu110" --extra-index-url https://download.pytorch.org/whl/cu110
+else
+  $PIP "torch==1.7.1"
+fi
 $PIP "allennlp==0.9.0" --no-deps
 # allennlp 0.9's runtime dependencies (hand-picked so that modern wheels can be used)
 $PIP \

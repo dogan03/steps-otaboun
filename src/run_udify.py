@@ -161,7 +161,7 @@ def prepare_treebank(train_file, dev_file, work, tb):
     tb_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(train_file, tb_dir / f"{tb}-ud-train.conllu")
     shutil.copy2(dev_file, tb_dir / f"{tb}-ud-dev.conllu")
-    shutil.copy2(EVAL_TESTS["ota"], tb_dir / f"{tb}-ud-test.conllu")  # only for UDify's own report
+    shutil.copy2(next(iter(EVAL_TESTS.values())), tb_dir / f"{tb}-ud-test.conllu")  # only for UDify's own report
     return work / "ud"
 
 
@@ -260,21 +260,18 @@ def _splits(train_set, k):
 
 
 def check_gpu(device):
-    """torch 1.4 is a CUDA 10.1 build: it only supports compute capability <= 7.5 (e.g. a T4).
-    Newer GPUs fail deep inside cuBLAS, so say it clearly up front."""
+    """Fail early if the GPU is newer than what the installed torch build supports."""
     if device < 0:
         return
-    import subprocess as sp
-    try:
-        out = sp.run(["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
-                     capture_output=True, text=True, check=True).stdout.strip().splitlines()
-    except Exception:
-        return
-    if device < len(out):
-        name, _, cap = out[device].partition(", ")
-        if cap and tuple(int(x) for x in cap.split(".")) > (7, 5):
-            sys.exit(f"This GPU ({name}, compute capability {cap}) is too new for UDify's torch 1.4 "
-                     f"(CUDA 10.1, up to 7.5). Switch the Colab runtime to a T4, or use --device -1 for CPU.")
+    import torch
+    if not torch.cuda.is_available():
+        sys.exit("No CUDA device visible; use --device -1 to run on CPU.")
+    major, minor = torch.cuda.get_device_capability(device)
+    supported = [int(a[3:].replace("_", "")) for a in torch.cuda.get_arch_list() if a.startswith("sm_")]
+    if supported and major * 10 + minor > max(supported):
+        sys.exit(f"This GPU ({torch.cuda.get_device_name(device)}, compute capability "
+                 f"{major}.{minor}) is newer than torch {torch.__version__} supports "
+                 f"(up to sm_{max(supported)}). Use a T4/A100 runtime, or --device -1 for CPU.")
 
 
 def cmd_run(args):
