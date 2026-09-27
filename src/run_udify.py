@@ -255,8 +255,27 @@ def _splits(train_set, k):
     return [(0, TRAIN_SETS[train_set], DEV[train_set])]
 
 
+def check_gpu(device):
+    """torch 1.4 is a CUDA 10.1 build: it only supports compute capability <= 7.5 (e.g. a T4).
+    Newer GPUs fail deep inside cuBLAS, so say it clearly up front."""
+    if device < 0:
+        return
+    import subprocess as sp
+    try:
+        out = sp.run(["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
+                     capture_output=True, text=True, check=True).stdout.strip().splitlines()
+    except Exception:
+        return
+    if device < len(out):
+        name, _, cap = out[device].partition(", ")
+        if cap and tuple(int(x) for x in cap.split(".")) > (7, 5):
+            sys.exit(f"This GPU ({name}, compute capability {cap}) is too new for UDify's torch 1.4 "
+                     f"(CUDA 10.1, up to 7.5). Switch the Colab runtime to a T4, or use --device -1 for CPU.")
+
+
 def cmd_run(args):
     ensure_udify()
+    check_gpu(args.device)
     k = max(args.cv, 1)
     for model, train_set in itertools.product(args.models, args.train_sets):
         for fold, train_file, dev_file in _splits(train_set, k):
