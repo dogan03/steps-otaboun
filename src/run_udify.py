@@ -175,6 +175,9 @@ def train(model, train_file, dev_file, rdir, work, args, prefix):
     cfg_path = work / "config.json"
     write_config(cfg_path, bert_path, args.epochs or 80, args.batch_size)
 
+    # allennlp refuses to write into a non-empty vocabulary dir, and runs of the same treebank
+    # (e.g. several seeds) reuse the same name, so clear it first.
+    shutil.rmtree(UDIFY_DIR / "data" / "vocab" / tb, ignore_errors=True)
     vocab_cmd = [sys.executable, "create_vocabs.py", "--dataset_dir", str(dataset_dir),
                  "--treebanks", tb, "--output_dir", "data/vocab"]
     if _run_to_log(vocab_cmd, rdir / "vocab.log", False, prefix=prefix, cwd=UDIFY_DIR) != 0:
