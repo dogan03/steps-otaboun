@@ -135,11 +135,14 @@ def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     if rc != 0 or not (work / "model" / "options.json").exists():
         sys.exit(f"[{prefix}] training failed (exit code {rc}); see {rdir / 'train.log'}")
 
-    saved = rdir / "model"
-    if saved.exists():
-        shutil.rmtree(saved)
-    shutil.copytree(work / "model", saved)
-    (saved / "COMPLETE").touch()  # written last: the copy above is complete
+    if args.keep_models:  # the checkpoint is not needed for scoring, and it is big
+        saved = rdir / "model"
+        if saved.exists():
+            shutil.rmtree(saved)
+        shutil.copytree(work / "model", saved)
+        (saved / "COMPLETE").touch()  # written last: the copy above is complete
+    elif (work / "model" / "log").exists():
+        shutil.copy2(work / "model" / "log", rdir / "model.log")
 
 
 def predict_and_score(model, rdir, work, results, args, prefix):
@@ -149,7 +152,8 @@ def predict_and_score(model, rdir, work, results, args, prefix):
             continue
         staged = stage(tpath, model, work, f"test-{tname}", args, prefix)
         pred = rdir / f"pred-{tname}.conllu"
-        cmd = [sys.executable, str(UDPIPE_DIR / "udpipe2.py"), str(rdir / "model"), "--predict",
+        model_dir = rdir / "model" if (rdir / "model" / "options.json").exists() else work / "model"
+        cmd = [sys.executable, str(UDPIPE_DIR / "udpipe2.py"), str(model_dir), "--predict",
                "--predict_input", str(staged), "--predict_output", str(pred),
                "--threads", str(args.threads)]
         rc = _run_to_log(cmd, rdir / f"predict-{tname}.log", False, prefix=prefix)
@@ -257,6 +261,8 @@ def main():
     p_run.add_argument("--folds", nargs="+", type=int, default=None, metavar="I")
     p_run.add_argument("--threads", type=int, default=4)
     p_run.add_argument("--emb-batch-size", type=int, default=64)
+    p_run.add_argument("--keep-models", action="store_true",
+                       help="also copy the trained model to the output dir (large)")
     p_run.add_argument("--force", action="store_true")
     p_run.add_argument("--dry-run", action="store_true")
     p_run.set_defaults(func=cmd_run)

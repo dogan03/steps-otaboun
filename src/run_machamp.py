@@ -202,11 +202,15 @@ def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     saved = rdir / "model"
     saved.mkdir(exist_ok=True)
     for name in MODEL_FILES:
+        # Checkpoints are big; only keep them when asked for (they are not needed for scoring).
+        if name == "model.pt" and not args.keep_models:
+            continue
         if (work / "model" / name).exists():
             shutil.copy2(work / "model" / name, saved / name)
     shutil.copy2(dataset_path, rdir / "dataset.json")
     shutil.copy2(params_path, rdir / "params.json")
-    (saved / "COMPLETE").touch()  # written last: the copy above is complete
+    if args.keep_models:
+        (saved / "COMPLETE").touch()  # written last: the copy above is complete
 
 
 def predict_and_score(rdir, work, results, args, prefix):
@@ -220,7 +224,10 @@ def predict_and_score(rdir, work, results, args, prefix):
             continue
         test_in, raw_pred = work / f"test-{tname}.conllu", work / f"pred-{tname}.machamp.conllu"
         strip_multiwords(tpath, test_in)
-        cmd = [sys.executable, str(MACHAMP_DIR / "predict.py"), str(rdir / "model" / "model.pt"),
+        model_pt = rdir / "model" / "model.pt"
+        if not model_pt.exists():  # not copied to the output dir: use the local one
+            model_pt = work / "model" / "model.pt"
+        cmd = [sys.executable, str(MACHAMP_DIR / "predict.py"), str(model_pt),
                str(test_in), str(raw_pred), "--device", str(args.device)]
         rc = _run_to_log(cmd, rdir / f"predict-{tname}.log", False, prefix=prefix)
         if rc != 0:
@@ -364,6 +371,8 @@ def main():
     p_run.add_argument("--folds", nargs="+", type=int, default=None, metavar="I")
     p_run.add_argument("--device", type=int, default=0, help="CUDA device; -1 for CPU")
     p_run.add_argument("--epochs", type=int, default=None, help="override num_epochs (e.g. 1 for a test)")
+    p_run.add_argument("--keep-models", action="store_true",
+                       help="also copy the trained checkpoint to the output dir (large)")
     p_run.add_argument("--force", action="store_true", help="redo runs from scratch")
     p_run.add_argument("--dry-run", action="store_true")
     p_run.set_defaults(func=cmd_run)

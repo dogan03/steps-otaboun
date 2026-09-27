@@ -84,6 +84,9 @@ UPOS_VOCAB = "data/corpora/ota_boun/vocab/upos.vocab"
 # macOS uses 'spawn' for multiprocessing, which can't pickle the data loader's lambda
 # -> keep this 0 on a Mac. On Colab/Linux you can bump it to 2 for speed.
 NUM_WORKERS = 0
+# Where trained models go; Drive only when explicitly requested.
+SAVE_DIR = (OUTPUT_DIR / "saved_models") if os.environ.get("STEPS_KEEP_MODELS") == "1" \
+    else (Path(__file__).resolve().parent.parent / "steps_models")
 # --------------------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -114,9 +117,9 @@ def build_command(task, model, name, train_file, dev_file):
         f"data_loaders.paths.train={train_file}",
         f"data_loaders.paths.dev={dev_file}",
         f"data_loaders.args.num_workers={NUM_WORKERS}",
-        # Save the model checkpoint (model_best.pth) under STEPS_OUTPUT_DIR so it persists
-        # to Drive across sessions -- otherwise the trained model is lost when Colab resets.
-        f"trainer.save_dir={OUTPUT_DIR}/saved_models",
+        # Checkpoints go to local disk by default (they are large and not needed for scoring);
+        # set STEPS_KEEP_MODELS=1 to store them under STEPS_OUTPUT_DIR (e.g. Drive) instead.
+        f"trainer.save_dir={SAVE_DIR}",
     ]
     for tname, tpath in EVAL_TESTS.items():
         mods.append(f"data_loaders.paths.test_{tname}={tpath}")

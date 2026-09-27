@@ -13,3 +13,4 @@ udpipe2_embeddings/
 udify_work/
 udify_bert/
 .venv-udify/
+steps_models/

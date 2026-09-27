@@ -190,9 +190,11 @@ def train(model, train_file, dev_file, rdir, work, args, prefix):
     if not archives:
         sys.exit(f"[{prefix}] no model.tar.gz under {UDIFY_DIR / 'logs' / tb}")
     (rdir / "model").mkdir(exist_ok=True)
-    shutil.copy2(archives[-1], rdir / "model" / "model.tar.gz")
+    args.archive = archives[-1]  # local copy, used for prediction
+    if args.keep_models:  # the archive contains BERT, so it is big
+        shutil.copy2(archives[-1], rdir / "model" / "model.tar.gz")
+        (rdir / "model" / "COMPLETE").touch()  # written last: the copy above is complete
     shutil.copy2(cfg_path, rdir / "config.json")
-    (rdir / "model" / "COMPLETE").touch()  # written last: the copy above is complete
 
 
 def predict_and_score(rdir, work, results, args, prefix):
@@ -201,7 +203,9 @@ def predict_and_score(rdir, work, results, args, prefix):
         if tname in results:
             continue
         pred = rdir / f"pred-{tname}.conllu"
-        cmd = [sys.executable, "predict.py", str((rdir / "model" / "model.tar.gz").resolve()),
+        archive = rdir / "model" / "model.tar.gz"
+        archive = archive.resolve() if archive.exists() else Path(getattr(args, "archive", "")).resolve()
+        cmd = [sys.executable, "predict.py", str(archive),
                str(Path(tpath).resolve()), str(pred.resolve()),
                "--device", str(args.device), "--batch_size", str(args.batch_size)]
         if _run_to_log(cmd, rdir / f"predict-{tname}.log", False, prefix=prefix, cwd=UDIFY_DIR) != 0:
@@ -332,6 +336,8 @@ def main():
     p_run.add_argument("--folds", nargs="+", type=int, default=None, metavar="I")
     p_run.add_argument("--device", type=int, default=0, help="CUDA device; -1 for CPU")
     p_run.add_argument("--batch_size", type=int, default=32)
+    p_run.add_argument("--keep-models", action="store_true",
+                       help="also copy the trained model archive to the output dir (large)")
     p_run.add_argument("--force", action="store_true")
     p_run.add_argument("--dry-run", action="store_true")
     p_run.set_defaults(func=cmd_run)
