@@ -84,10 +84,14 @@ def prepare_bert(model):
     return target
 
 
-def write_config(cfg_path, bert_path, epochs, batch_size):
+def write_config(cfg_path, bert_path, epochs, batch_size, seed):
     """UDify's published fine-tuning configuration, with our BERT model plugged in."""
     bert_dir = str(Path(bert_path).resolve())
     cfg = {
+        # allennlp's three seeds; without them every run of a treebank would be identical
+        "random_seed": seed,
+        "numpy_seed": seed,
+        "pytorch_seed": seed,
         "dataset_reader": {
             "lazy": False,
             "token_indexers": {
@@ -165,7 +169,7 @@ def prepare_treebank(train_file, dev_file, work, tb):
     return work / "ud"
 
 
-def train(model, train_file, dev_file, rdir, work, args, prefix):
+def train(model, train_file, dev_file, seed, rdir, work, args, prefix):
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
@@ -173,7 +177,7 @@ def train(model, train_file, dev_file, rdir, work, args, prefix):
     dataset_dir = prepare_treebank(train_file, dev_file, work, tb)
     bert_path = prepare_bert(model)
     cfg_path = work / "config.json"
-    write_config(cfg_path, bert_path, args.epochs or 80, args.batch_size)
+    write_config(cfg_path, bert_path, args.epochs or 80, args.batch_size, seed)
 
     # allennlp refuses to write into a non-empty vocabulary dir, and runs of the same treebank
     # (e.g. several seeds) reuse the same name, so clear it first.
@@ -241,7 +245,7 @@ def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
     if trained:
         print(f"[{prefix}] model already trained, predicting only: {', '.join(missing)}")
     else:
-        train(model, train_file, dev_file, rdir, work, args, prefix)
+        train(model, train_file, dev_file, seed, rdir, work, args, prefix)
     predict_and_score(rdir, work, results, args, prefix)
     shutil.rmtree(work, ignore_errors=True)
 
