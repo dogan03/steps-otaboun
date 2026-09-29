@@ -28,18 +28,34 @@ from significance_test import overall, read_conllu, sentence_counts
 METRIC_KEY = {"las": "LAS", "uas": "UAS", "upos": "UPOS"}
 
 
+def _steps_runs(model, train_set, test, key):
+    """STEPS stores things differently: predictions in predictions/, scores in the run logs."""
+    from run_sweep import parse_log
+    task, kind = ("upos", "pos") if key == "UPOS" else ("parse", "parsed")
+    runs = []
+    for pred in sorted((OUTPUT_DIR / "predictions").glob(f"{task}_{model}_{train_set}_*-{test}-{kind}.conllu")):
+        run_name = pred.name[: pred.name.index(f"-{test}-{kind}.conllu")]
+        scores = parse_log(task, OUTPUT_DIR / f"output_{run_name}.txt")
+        if scores and f"{key}_{test}" in scores:
+            runs.append((scores[f"{key}_{test}"], pred))
+    return runs
+
+
 def representative(system, test, metric):
     """The run of this system whose score is closest to the system's mean, with its scores."""
     parser, model, train_set = system.split(":")
     key = METRIC_KEY[metric]
-    runs = []
-    for results_path in sorted((OUTPUT_DIR / parser).glob(f"{model}_{train_set}_*/results.json")):
-        scores = json.loads(results_path.read_text())
-        pred = results_path.parent / f"pred-{test}.conllu"
-        if test in scores and key in scores[test] and pred.exists():
-            runs.append((scores[test][key], pred))
+    if parser == "steps":
+        runs = _steps_runs(model, train_set, test, key)
+    else:
+        runs = []
+        for results_path in sorted((OUTPUT_DIR / parser).glob(f"{model}_{train_set}_*/results.json")):
+            scores = json.loads(results_path.read_text())
+            pred = results_path.parent / f"pred-{test}.conllu"
+            if test in scores and key in scores[test] and pred.exists():
+                runs.append((scores[test][key], pred))
     if not runs:
-        sys.exit(f"No runs with predictions for {system} on test '{test}' under {OUTPUT_DIR / parser}")
+        sys.exit(f"No runs with predictions for {system} on test '{test}' under {OUTPUT_DIR}")
     mean = statistics.mean(v for v, _ in runs)
     value, pred = min(runs, key=lambda vp: abs(vp[0] - mean))
     return {"system": system, "runs": len(runs), "mean": round(mean, 2),
