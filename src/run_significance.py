@@ -17,6 +17,7 @@ import argparse
 import itertools
 import json
 import random
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -43,13 +44,22 @@ def _steps_runs(model, train_set, test, key):
 
 def representative(system, test, metric):
     """The run of this system whose score is closest to the system's mean, with its scores."""
-    parser, model, train_set = system.split(":")
+    parts = system.split(":")
+    parser, model, train_set = parts[:3]
+    config = parts[3] if len(parts) > 3 else None   # optional: MaChAmp params config
     key = METRIC_KEY[metric]
     if parser == "steps":
         runs = _steps_runs(model, train_set, test, key)
     else:
+        # Run dirs are "<model>_<train>_<split>_seed<n>" plus an optional config suffix
+        # (e.g. "_es_mix"). Without an explicit config, only the default runs count.
+        suffix = re.escape("_" + config) if config else ""
+        pattern = re.compile(rf"^{re.escape(model)}_{re.escape(train_set)}_"
+                             rf"(cv\d+_fold\d+|dev)_seed\d+{suffix}$")
         runs = []
         for results_path in sorted((OUTPUT_DIR / parser).glob(f"{model}_{train_set}_*/results.json")):
+            if not pattern.match(results_path.parent.name):
+                continue
             scores = json.loads(results_path.read_text())
             pred = results_path.parent / f"pred-{test}.conllu"
             if test in scores and key in scores[test] and pred.exists():
@@ -86,7 +96,9 @@ def randomization_test(gold_path, pred_a, pred_b, metric, iterations, seed):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("systems", nargs="+", help="<parser>:<encoder>:<train set>, e.g. udpipe2:berturk:ota")
+    ap.add_argument("systems", nargs="+",
+                    help="<parser>:<encoder>:<train set>[:<config>], e.g. udpipe2:berturk:ota "
+                         "or machamp:berturk:ota:es_mix (default config when omitted)")
     ap.add_argument("--test", default="ota", choices=list(EVAL_TESTS))
     ap.add_argument("--metric", default="las", choices=list(METRIC_KEY))
     ap.add_argument("--all-pairs", action="store_true", help="test every pair, not just the first two")
