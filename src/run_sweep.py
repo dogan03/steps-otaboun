@@ -51,7 +51,37 @@ TRAIN_SETS = {
     "ota":    "data/corpora/ota_boun/ota_boun-train-2026.conllu",  # historical Turkish (2026, 1600 sents)
     "tr_ota": "data/corpora/ota_boun/best_together.conllu",        # TR + OTA combined
     "dudu":   "data/corpora/ota_dudu/ota_dudu-ud-train.conllu",    # Ottoman Turkish DUDU (UD 2.18)
+    # Combined training sets, built on demand by _ensure_combined() below.
+    "ota_dudu":    "data/corpora/combined/ota_dudu-train.conllu",     # the two historical treebanks
+    "tr_dudu":     "data/corpora/combined/tr_dudu-train.conllu",
+    "tr_ota_dudu": "data/corpora/combined/tr_ota_dudu-train.conllu",  # everything
 }
+
+# Which files each combined set is concatenated from (in this order).
+COMBINED = {
+    "ota_dudu":    ["ota", "dudu"],
+    "tr_dudu":     ["tr", "dudu"],
+    "tr_ota_dudu": ["tr", "ota", "dudu"],
+}
+
+
+def _ensure_combined():
+    """Create the combined training files if they are missing (plain concatenation)."""
+    for name, parts in COMBINED.items():
+        target = Path(TRAIN_SETS[name])
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as out:
+            for part in parts:
+                text = Path(TRAIN_SETS[part]).read_text(encoding="utf-8")
+                out.write(text if text.endswith("\n\n") else text.rstrip("\n") + "\n\n")
+        os.replace(tmp, target)
+        print(f"built {target}")
+
+
+_ensure_combined()
 
 # Test sets EVERY trained model is evaluated on (train once -> eval on all of these, in
 # the same run; no retraining per test set).
