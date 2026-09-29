@@ -30,7 +30,20 @@ needed for ModernBERT models (TabiBERT, mmBERT).
 ## STEPS
 
 ```bash
-.venv/bin/python src/run_sweep.py run --tasks parse upos --models berturk --train-sets ota --cv 5
+# its own environment: modern torch (with its CUDA packages) + the old transformers
+uv venv -p 3.9 .venv-steps
+uv pip install --python .venv-steps/bin/python torch          # NOT with --no-deps: CUDA libs
+uv pip install --python .venv-steps/bin/python "transformers==3.1.0" --no-deps
+uv pip install --python .venv-steps/bin/python numpy packaging requests regex tqdm filelock \
+    sentencepiece sacremoses tokenizers mlflow pyconll networkx sympy
+.venv-steps/bin/python src/run_sweep.py run --tasks parse upos --models berturk --train-sets ota --cv 5
+```
+The BERTurk folder in the repo holds LFS pointers, so fetch the weights and give the tokenizer
+its config (without it, transformers 3.1.0 lowercases and strips accents):
+```bash
+curl -sL -o data/pretrained_embeddings/bert-base-turkish-cased/pytorch_model.bin \
+  https://huggingface.co/dbmdz/bert-base-turkish-cased/resolve/main/pytorch_model.bin
+echo '{"do_lower_case": false, "max_len": 512}' > data/pretrained_embeddings/bert-base-turkish-cased/tokenizer_config.json
 ```
 Config: `configs/ota_boun.json` (parsing) and `configs/ota_upos.json` (POS), i.e. the settings
 of the previous paper. Needs the old stack (transformers 3.1.0); the local `.venv` has it.
