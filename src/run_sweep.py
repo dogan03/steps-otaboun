@@ -72,7 +72,9 @@ def _ensure_combined():
         if target.exists():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".tmp")
+        # A unique temp name per process: several runs may start in parallel and would
+        # otherwise write, and rename, the very same file.
+        tmp = target.with_suffix(f".tmp{os.getpid()}")
         with open(tmp, "w", encoding="utf-8") as out:
             for part in parts:
                 text = Path(TRAIN_SETS[part]).read_text(encoding="utf-8")
