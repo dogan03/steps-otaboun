@@ -84,10 +84,22 @@ def ensure_udpipe2():
             subprocess.run(git + ["apply", str(patch)], check=True)
 
 
+def _cache_key(corpus_path):
+    """A cache name that is unique per file, not just per basename: every train set's CV
+    folds are called `fold0_train.conllu`, so the bare stem would make `ota_dudu` and
+    `tr_ota` share embeddings (and UDPipe 2 then dies on the sentence-count mismatch)."""
+    path = corpus_path.resolve()
+    try:
+        path = path.relative_to(REPO_ROOT)
+    except ValueError:
+        path = Path(*path.parts[1:])
+    return str(path.with_suffix("")).replace("/", "__")
+
+
 def embeddings_for(corpus_path, model, args, prefix):
     """Contextual embeddings for one corpus file; cached per encoder + file."""
     corpus_path = Path(corpus_path)
-    cache = EMB_CACHE / model / f"{corpus_path.stem}.npz"
+    cache = EMB_CACHE / model / f"{_cache_key(corpus_path)}.npz"
     if not cache.exists():
         cache.parent.mkdir(parents=True, exist_ok=True)
         tmp = cache.with_suffix(f".tmp{os.getpid()}.npz")  # unique: runs may go in parallel
