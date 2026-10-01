@@ -55,13 +55,25 @@ def run_dir(model, train_set, k, fold, seed, epochs=None):
     return OUTPUT_DIR / "udify" / name
 
 
-def treebank_name(train_set, k, fold):
-    return f"{train_set}_cv{k}_fold{fold}" if k > 1 else f"{train_set}_dev"
+def treebank_name(train_set, k, fold, seed):
+    """One name per run: UDify keeps the vocabulary and the trained archive under this
+    name, so two runs sharing it (e.g. two seeds) would overwrite each other."""
+    split = f"cv{k}_fold{fold}" if k > 1 else "dev"
+    return f"{train_set}_{split}_seed{seed}"
 
 
 def ensure_udify():
-    if not UDIFY_DIR.exists():
-        subprocess.run(["git", "clone", "-q", UDIFY_REPO, str(UDIFY_DIR)], check=True)
+    """Clone UDify if it is missing. Several runs may start at once, so clone into a
+    private directory first and move it into place; whoever gets there first wins."""
+    if UDIFY_DIR.exists():
+        return
+    staging = UDIFY_DIR.with_name(f"{UDIFY_DIR.name}.{os.getpid()}")
+    shutil.rmtree(staging, ignore_errors=True)
+    subprocess.run(["git", "clone", "-q", UDIFY_REPO, str(staging)], check=True)
+    try:
+        os.replace(staging, UDIFY_DIR)
+    except OSError:          # another process finished first
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def prepare_bert(model):
@@ -78,7 +90,7 @@ def prepare_bert(model):
             continue
         url = f"https://huggingface.co/{MODELS[model]}/resolve/main/{remote}"
         print(f"  downloading {url}")
-        tmp = target / (local + ".tmp")
+        tmp = target / f"{local}.tmp{os.getpid()}"
         urllib.request.urlretrieve(url, tmp)
         os.replace(tmp, target / local)
     return target
@@ -225,7 +237,7 @@ def predict_and_score(rdir, work, results, args, prefix):
 def run_one(model, train_set, k, fold, seed, train_file, dev_file, args):
     rdir = run_dir(model, train_set, k, fold, seed, args.epochs)
     prefix = f"udify {model} {train_set} | fold {fold + 1}/{k} seed {seed}"
-    args.treebank = treebank_name(train_set, k, fold)
+    args.treebank = treebank_name(train_set, k, fold, seed)
     results_path = rdir / "results.json"
     results = json.loads(results_path.read_text()) if results_path.exists() and not args.force else {}
     missing = [t for t in EVAL_TESTS if t not in results]
