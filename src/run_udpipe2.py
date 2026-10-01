@@ -56,6 +56,11 @@ WORK_ROOT = REPO_ROOT / "udpipe2_work"       # local scratch (checkpoints while 
 EMB_CACHE = REPO_ROOT / "udpipe2_embeddings"  # cached .npz per encoder + corpus file
 
 
+def _epoch_schedule(value):
+    """UDPipe 2 wants `<epochs>:<lr>[,<epochs>:<lr>...]`; accept a bare number too."""
+    return value if ":" in value else f"{value}:1e-3"
+
+
 def run_dir(model, train_set, k, fold, seed, epochs=None):
     split = f"cv{k}_fold{fold}" if k > 1 else "dev"
     name = f"{model}_{train_set}_{split}_seed{seed}"
@@ -253,8 +258,9 @@ def main():
         p.add_argument("--train-sets", nargs="+", default=["ota"], choices=list(TRAIN_SETS))
         p.add_argument("--cv", type=int, default=5, metavar="K", help="k-fold CV (default 5; 0/1 = dev set)")
         p.add_argument("--seeds", nargs="+", type=int, default=[SEED])
-        p.add_argument("--epochs", default=None,
-                       help="override UDPipe 2's epoch schedule, e.g. '1:1e-3' for a quick test")
+        p.add_argument("--epochs", default=None, type=_epoch_schedule,
+                       help="override UDPipe 2's epoch schedule, e.g. '1:1e-3' for a quick "
+                            "test; a bare number means that many epochs at lr 1e-3")
 
     p_run = sub.add_parser("run", help="train + predict + score (resumes by default)")
     add_filters(p_run)
