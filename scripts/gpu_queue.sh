@@ -48,8 +48,14 @@ while IFS= read -r line; do
   done
   echo "$(date +%H:%M) basladi: $name  (calisan: $n, bos GPU: ${free} MiB)"
   bash -c "$cmd" > "$LOGDIR/$name.log" 2>&1 &
-  running="$running $!"
-  sleep "$SETTLE"
+  pid=$!
+  running="$running $pid"
+  # Give the new job time to claim its GPU memory before considering the next one, but
+  # stop waiting as soon as it is done (a finished run is skipped in a second or two).
+  waited=0
+  while [ "$waited" -lt "$SETTLE" ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 5; waited=$((waited + 5))
+  done
 done
 
 wait
