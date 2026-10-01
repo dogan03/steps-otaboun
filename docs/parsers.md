@@ -77,3 +77,20 @@ unfreezing). Two limitations, both inherent to UDify:
 - **GPU up to compute capability 7.5** — torch 1.4 is a CUDA 10.1 build: Colab's T4 works,
   an A100 does not. On Apple Silicon the setup script uses an x86_64 Python under Rosetta,
   which is enough to test the pipeline on CPU.
+
+## Running several jobs at once
+
+`scripts/gpu_queue.sh` starts jobs only when the GPU really has room for them, so a run
+cannot die with CUDA out of memory. Jobs come from stdin, one `<name> <command ...>` per line:
+
+```bash
+for sd in 8446 8447 8448; do
+  echo "udify_dudu_$sd .venv-udify/bin/python src/run_udify.py run --models berturk \
+        --train-sets dudu --cv 0 --seeds $sd"
+done > jobs.txt
+bash scripts/gpu_queue.sh --slots 4 --need 11000 --log-dir /content/qlogs < jobs.txt
+```
+
+`--need` is how much free memory (MiB) one run of that parser wants: STEPS ~8000,
+UDify ~11000, MaChAmp ~8000, UDPipe 2 ~6000. The runners skip finished runs, so the same
+queue can be started again after a crash or a disconnect.
