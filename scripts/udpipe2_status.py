@@ -67,17 +67,19 @@ def main():
             epochs_total += EPOCHS
             if (rdir / "results.json").exists():
                 done += 1; epochs_sum += EPOCHS
-                cells.append("✓")
+                cells.append("bitti")
                 continue
             e = epochs_done(log)
             if e is None:
                 waiting += 1
-                cells.append("–")
+                cells.append("-")
                 continue
             running += 1; epochs_sum += e
             cells.append(f"{e}/{EPOCHS}")
             began = starts.get(f"{args.name_prefix}{ts}_f{i}")
-            if e and began is not None:
+            # a run that has just started is still paying its embedding-extraction cost,
+            # so its apparent rate would drag the average down
+            if e >= 5 and began is not None:
                 mins = (now_min - began) % (24 * 60)
                 if mins:
                     rates.append(e / mins * 60)
