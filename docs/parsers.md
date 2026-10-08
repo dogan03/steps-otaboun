@@ -60,7 +60,13 @@ and parser over frozen contextual embeddings = the mean of the encoder's last fo
 Embeddings are computed once per encoder + corpus and cached in `udpipe2_embeddings/`.
 `patches/udpipe2-tf2.patch` makes training run on TensorFlow 2 (plain Adam instead of the
 removed `tf.contrib` LazyAdam, no TensorBoard summaries);
-`patches/udpipe2-wembeddings-models.patch` registers our encoders in the embeddings service.
+`patches/udpipe2-wembeddings-models.patch` registers our encoders in the embeddings service
+and makes ModernBERT encoders (TabiBERT, mmBERT) work: TensorFlow has no ModernBERT, so the
+embeddings are computed with PyTorch instead (training reads them back from a .npz file, so
+nothing downstream changes); their tokenizers get explicit special tokens; and their hidden
+states are passed through the model's final LayerNorm before being averaged, without which
+they carry outlier activations ~50x larger than BERT's and the tagger cannot learn from them.
+See plans/logs/2026-10-09_modernbert_udpipe2.txt.
 
 ## UDify
 
