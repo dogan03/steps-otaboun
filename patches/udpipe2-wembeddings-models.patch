@@ -1,5 +1,5 @@
 diff --git a/wembeddings/wembeddings.py b/wembeddings/wembeddings.py
-index 16f3ea2..7841f89 100644
+index 16f3ea2..9079c97 100644
 --- a/wembeddings/wembeddings.py
 +++ b/wembeddings/wembeddings.py
 @@ -26,6 +26,13 @@ class WEmbeddings:
@@ -16,7 +16,7 @@ index 16f3ea2..7841f89 100644
      }
  
      MAX_SUBWORDS_PER_SENTENCE = 510
-@@ -49,10 +56,22 @@ class WEmbeddings:
+@@ -49,10 +56,31 @@ class WEmbeddings:
  
                  self.tokenizer = transformers.AutoTokenizer.from_pretrained(self._transformers_model_name, use_fast=True)
  
@@ -35,11 +35,58 @@ index 16f3ea2..7841f89 100644
 +                    import os, tempfile
 +                    converted = os.path.join(tempfile.gettempdir(),
 +                                             "pt2tf_" + self._transformers_model_name.replace("/", "_"))
-+                    if not os.path.exists(os.path.join(converted, "pytorch_model.bin")):
-+                        torch_model = transformers.AutoModel.from_pretrained(self._transformers_model_name)
-+                        torch_model.save_pretrained(converted, safe_serialization=False)
-+                    self._transformers_model = transformers.TFAutoModel.from_pretrained(
-+                        converted, config=config, from_pt=True)
++                    try:
++                        if not os.path.exists(os.path.join(converted, "pytorch_model.bin")):
++                            torch_model = transformers.AutoModel.from_pretrained(self._transformers_model_name)
++                            torch_model.save_pretrained(converted, safe_serialization=False)
++                        self._transformers_model = transformers.TFAutoModel.from_pretrained(
++                            converted, config=config, from_pt=True)
++                    except Exception:
++                        # [steps-otaboun] Architectures TensorFlow does not implement at all
++                        # (ModernBERT: TabiBERT, mmBERT). Only the embeddings are computed
++                        # here -- training reads them back from a .npz file -- so computing
++                        # this part with PyTorch changes nothing downstream.
++                        self.compute_embeddings = self._torch_embeddings(config)
++                        self._model_loaded = True
++                        return
  
                  def compute_embeddings(subwords, segments):
                      subword_embeddings_layers = self._transformers_model(
+@@ -72,6 +100,37 @@ class WEmbeddings:
+ 
+                 self._model_loaded = True
+ 
++        def _torch_embeddings(self, config):
++            """PyTorch version of the graph in load(): mean of the chosen hidden layers, then
++            the mean over each word's subwords. Returns a tensor whose .numpy() gives the same
++            [sentences, words, dim] array the TensorFlow path returns."""
++            import torch
++            import transformers
++
++            model = transformers.AutoModel.from_pretrained(self._transformers_model_name, config=config)
++            device = "cuda" if torch.cuda.is_available() else "cpu"
++            model.to(device).eval()
++            layer_start, layer_end = self._layer_start, self._layer_end
++
++            def compute(subwords, segments):
++                ids = torch.as_tensor(subwords, dtype=torch.long, device=device)
++                mask = (ids >= 0).long()
++                with torch.no_grad():
++                    hidden = model(input_ids=ids.clamp(min=0), attention_mask=mask).hidden_states
++                    # drop the leading special token, exactly as the TF path does
++                    emb = torch.stack(hidden[layer_start:layer_end], 0).mean(0)[:, 1:].float()
++                    seg = torch.as_tensor(segments, dtype=torch.long, device=device)
++                    batch, length, dim = emb.shape
++                    words = int(seg.max().item()) + 1      # padding segment id == max sentence len
++                    total = torch.zeros(batch, words, dim, dtype=emb.dtype, device=device)
++                    count = torch.zeros(batch, words, 1, dtype=emb.dtype, device=device)
++                    total.scatter_add_(1, seg.unsqueeze(-1).expand(-1, -1, dim), emb)
++                    count.scatter_add_(1, seg.unsqueeze(-1),
++                                       torch.ones(batch, length, 1, dtype=emb.dtype, device=device))
++                    return (total / count.clamp(min=1))[:, :-1].cpu()
++
++            return compute
++
+ 
+     def __init__(self, max_form_len=64, threads=None, preload_models=[]):
+         import tensorflow as tf
