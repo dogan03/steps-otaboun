@@ -1,5 +1,5 @@
 diff --git a/wembeddings/wembeddings.py b/wembeddings/wembeddings.py
-index 16f3ea2..481181b 100644
+index 16f3ea2..69af8de 100644
 --- a/wembeddings/wembeddings.py
 +++ b/wembeddings/wembeddings.py
 @@ -26,6 +26,13 @@ class WEmbeddings:
@@ -52,7 +52,7 @@ index 16f3ea2..481181b 100644
  
                  def compute_embeddings(subwords, segments):
                      subword_embeddings_layers = self._transformers_model(
-@@ -72,6 +100,52 @@ class WEmbeddings:
+@@ -72,6 +100,59 @@ class WEmbeddings:
  
                  self._model_loaded = True
  
@@ -63,12 +63,13 @@ index 16f3ea2..481181b 100644
 +            wrapped = self.tokenizer.build_inputs_with_special_tokens(subwords)
 +            if len(wrapped) == len(subwords) + 2:
 +                return wrapped
-+            first = self.tokenizer.cls_token_id
-+            last = self.tokenizer.sep_token_id
-+            if first is None:
-+                first = self.tokenizer.bos_token_id
-+            if last is None:
-+                last = self.tokenizer.eos_token_id
++            # ask the tokenizer what encode() really adds around a word
++            probe = self.tokenizer.encode("a")
++            bare = self.tokenizer.encode("a", add_special_tokens=False)
++            if len(probe) - len(bare) == 2:
++                return [probe[0]] + subwords + [probe[-1]]
++            first = self.tokenizer.cls_token_id or self.tokenizer.bos_token_id
++            last = self.tokenizer.sep_token_id or self.tokenizer.eos_token_id
 +            return [first] + subwords + [last]
 +
 +        def _torch_embeddings(self, config):
@@ -87,7 +88,13 @@ index 16f3ea2..481181b 100644
 +                ids = torch.as_tensor(subwords, dtype=torch.long, device=device)
 +                mask = (ids >= 0).long()
 +                with torch.no_grad():
-+                    hidden = model(input_ids=ids.clamp(min=0), attention_mask=mask).hidden_states
++                    output = model(input_ids=ids.clamp(min=0), attention_mask=mask)
++                    hidden = list(output.hidden_states)
++                    # [steps-otaboun] ModernBERT puts the state from *before* its final
++                    # LayerNorm in hidden_states; only last_hidden_state is normalized.
++                    # Averaging the raw one wrecks the scale. A no-op for BERT/RoBERTa.
++                    if getattr(output, "last_hidden_state", None) is not None:
++                        hidden[-1] = output.last_hidden_state
 +                    # drop the leading special token, exactly as the TF path does
 +                    emb = torch.stack(hidden[layer_start:layer_end], 0).mean(0)[:, 1:].float()
 +                    seg = torch.as_tensor(segments, dtype=torch.long, device=device)
@@ -105,7 +112,7 @@ index 16f3ea2..481181b 100644
  
      def __init__(self, max_form_len=64, threads=None, preload_models=[]):
          import tensorflow as tf
-@@ -125,14 +199,14 @@ class WEmbeddings:
+@@ -125,14 +206,14 @@ class WEmbeddings:
                  for word_subwords in sentence_subwords:
                      # Split sentences with too many subwords
                      if len(subwords[-1]) + len(word_subwords) > self.MAX_SUBWORDS_PER_SENTENCE:
