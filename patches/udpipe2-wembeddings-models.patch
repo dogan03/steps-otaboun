@@ -1,5 +1,5 @@
 diff --git a/wembeddings/wembeddings.py b/wembeddings/wembeddings.py
-index 16f3ea2..9079c97 100644
+index 16f3ea2..481181b 100644
 --- a/wembeddings/wembeddings.py
 +++ b/wembeddings/wembeddings.py
 @@ -26,6 +26,13 @@ class WEmbeddings:
@@ -52,10 +52,25 @@ index 16f3ea2..9079c97 100644
  
                  def compute_embeddings(subwords, segments):
                      subword_embeddings_layers = self._transformers_model(
-@@ -72,6 +100,37 @@ class WEmbeddings:
+@@ -72,6 +100,52 @@ class WEmbeddings:
  
                  self._model_loaded = True
  
++        def add_special_tokens(self, subwords):
++            """[steps-otaboun] The code below assumes exactly one leading and one trailing
++            special token. Fast tokenizers without a post-processing template (ModernBERT:
++            TabiBERT, mmBERT) return the ids unchanged, so add [CLS]/[SEP] explicitly."""
++            wrapped = self.tokenizer.build_inputs_with_special_tokens(subwords)
++            if len(wrapped) == len(subwords) + 2:
++                return wrapped
++            first = self.tokenizer.cls_token_id
++            last = self.tokenizer.sep_token_id
++            if first is None:
++                first = self.tokenizer.bos_token_id
++            if last is None:
++                last = self.tokenizer.eos_token_id
++            return [first] + subwords + [last]
++
 +        def _torch_embeddings(self, config):
 +            """PyTorch version of the graph in load(): mean of the chosen hidden layers, then
 +            the mean over each word's subwords. Returns a tensor whose .numpy() gives the same
@@ -90,3 +105,20 @@ index 16f3ea2..9079c97 100644
  
      def __init__(self, max_form_len=64, threads=None, preload_models=[]):
          import tensorflow as tf
+@@ -125,14 +199,14 @@ class WEmbeddings:
+                 for word_subwords in sentence_subwords:
+                     # Split sentences with too many subwords
+                     if len(subwords[-1]) + len(word_subwords) > self.MAX_SUBWORDS_PER_SENTENCE:
+-                        subwords[-1] = model.tokenizer.build_inputs_with_special_tokens(subwords[-1])
++                        subwords[-1] = model.add_special_tokens(subwords[-1])
+                         segments.append([])
+                         subwords.append([])
+                         parts[-1].append(0)
+                     segments[-1].extend([parts[-1][-1]] * len(word_subwords))
+                     subwords[-1].extend(word_subwords)
+                     parts[-1][-1] += 1
+-                subwords[-1] = model.tokenizer.build_inputs_with_special_tokens(subwords[-1])
++                subwords[-1] = model.add_special_tokens(subwords[-1])
+ 
+             max_sentence_len = max(len(sentence) for sentence in sentences)
+             max_subwords = max(len(sentence) for sentence in subwords)
